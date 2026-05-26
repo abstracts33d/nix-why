@@ -12,6 +12,6 @@ let
   adapters = import ./adapters/default.nix { inherit lib; };
 in
 {
-  inherit (whyOption) resolve render;
+  inherit (whyOption) resolve render whatSets;
   inherit adapters;
 }

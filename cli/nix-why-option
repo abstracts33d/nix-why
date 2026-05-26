@@ -343,20 +343,47 @@ fi
 # ---------------------------------------------------------------------------
 # Tree renderer
 # ---------------------------------------------------------------------------
+render_conflict() {
+  local conflict="$1"
+  local msg involved_count
+  msg=$(jq -r '.message' <<< "$conflict")
+  involved_count=$(jq -r '.involvedDefinitions | length' <<< "$conflict")
+
+  printf '\n  %b⚠ CONFLICT%b: %s\n' "$C_RED" "$C_RESET" "$msg"
+  if ((involved_count > 0)); then
+    printf '  Involved definitions:\n'
+    while IFS= read -r def; do
+      local file line priorityKind value pos
+      file=$(jq -r '.file // "<unknown>"' <<< "$def")
+      line=$(jq -r '.line // empty' <<< "$def")
+      priorityKind=$(jq -r '.priorityKind // empty' <<< "$def")
+      value=$(jq -c '.value' <<< "$def")
+      pos="$file"
+      [[ -n "$line" ]] && pos="${file}:${line}"
+      printf '    - %s [%s] → %s\n' "$pos" "${priorityKind:-unknown}" "$(render_value "$value" "$max_value")"
+    done < <(jq -c '.involvedDefinitions[]' <<< "$conflict")
+  fi
+}
+
 render_tree() {
   local ast="$1"
 
-  local path type isDefined winningPriority def_count
+  local path type isDefined winningPriority def_count valueError conflict_count
   path=$(jq -r '.path' <<< "$ast")
   type=$(jq -r '.type // "unknown"' <<< "$ast")
   isDefined=$(jq -r '.isDefined' <<< "$ast")
   winningPriority=$(jq -r '.winningPriority // empty' <<< "$ast")
   def_count=$(jq -r '.definitions | length' <<< "$ast")
+  valueError=$(jq -r '.valueError // empty' <<< "$ast")
+  conflict_count=$(jq -r '.conflicts | length' <<< "$ast")
 
   # Header
   printf '%b%s%b : %b%s%b\n' "$C_BOLD" "$path" "$C_RESET" "$C_CYAN" "$type" "$C_RESET"
 
-  if [[ "$isDefined" == "true" ]]; then
+  # Value line: respects valueError (conflict case) and isDefined.
+  if [[ -n "$valueError" ]]; then
+    printf '  value     %b<unresolved - merge conflict>%b\n' "$C_RED" "$C_RESET"
+  elif [[ "$isDefined" == "true" ]]; then
     local val_raw
     val_raw=$(jq -c '.value' <<< "$ast")
     printf '  value     %s\n' "$(render_value "$val_raw" "$max_value")"
@@ -375,6 +402,13 @@ render_tree() {
       printf '  declared  %s\n' "$f"
     fi
   done < <(jq -c '.declarations[]' <<< "$ast")
+
+  # Conflicts block (v0.2): rendered before the definitions list.
+  if ((conflict_count > 0)); then
+    while IFS= read -r conflict; do
+      render_conflict "$conflict"
+    done < <(jq -c '.conflicts[]' <<< "$ast")
+  fi
 
   echo
 

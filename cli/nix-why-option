@@ -281,17 +281,176 @@ case "$kind" in
 esac
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+priority_label() {
+  case "$1" in
+    10) echo "mkVMOverride" ;;
+    50) echo "mkForce" ;;
+    60) echo "mkImageMediaOverride" ;;
+    100) echo "default" ;;
+    1000) echo "mkDefault" ;;
+    1500) echo "mkOptionDefault" ;;
+    null) echo "unknown" ;;
+    *) echo "mkOverride $1" ;;
+  esac
+}
+
+# Render a JSON value for human consumption. Strings get their quotes
+# stripped, other JSON types are emitted as-is. Truncates past max_value
+# with a trailing ellipsis.
+render_value() {
+  local raw="$1"
+  local maxv="$2"
+  local plain
+  if [[ "$raw" =~ ^\".*\"$ ]]; then
+    plain="$(printf '%s' "$raw" | jq -r '.')"
+  else
+    plain="$raw"
+  fi
+  local len=${#plain}
+  if ((len > maxv)); then
+    printf '%s...' "${plain:0:$maxv}"
+  else
+    printf '%s' "$plain"
+  fi
+}
+
+# ANSI color helpers. Bind to empty strings when colors are disabled so
+# the call sites stay clean.
+if ((no_color)); then
+  C_RESET=""; C_BOLD=""; C_DIM=""
+  C_GREEN=""; C_YELLOW=""; C_CYAN=""; C_RED=""
+else
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+  C_GREEN=$'\033[32m'
+  C_YELLOW=$'\033[33m'
+  C_CYAN=$'\033[36m'
+  C_RED=$'\033[31m'
+fi
+
+# ---------------------------------------------------------------------------
+# Tree renderer
+# ---------------------------------------------------------------------------
+render_tree() {
+  local ast="$1"
+
+  local path type isDefined winningPriority def_count
+  path=$(jq -r '.path' <<< "$ast")
+  type=$(jq -r '.type // "unknown"' <<< "$ast")
+  isDefined=$(jq -r '.isDefined' <<< "$ast")
+  winningPriority=$(jq -r '.winningPriority // empty' <<< "$ast")
+  def_count=$(jq -r '.definitions | length' <<< "$ast")
+
+  # Header
+  printf '%b%s%b : %b%s%b\n' "$C_BOLD" "$path" "$C_RESET" "$C_CYAN" "$type" "$C_RESET"
+
+  if [[ "$isDefined" == "true" ]]; then
+    local val_raw
+    val_raw=$(jq -c '.value' <<< "$ast")
+    printf '  value     %s\n' "$(render_value "$val_raw" "$max_value")"
+  else
+    printf '  value     %b<not defined>%b\n' "$C_DIM" "$C_RESET"
+  fi
+
+  # Declarations
+  while IFS= read -r decl; do
+    local f l
+    f=$(jq -r '.file' <<< "$decl")
+    l=$(jq -r '.line // empty' <<< "$decl")
+    if [[ -n "$l" ]]; then
+      printf '  declared  %s:%s\n' "$f" "$l"
+    else
+      printf '  declared  %s\n' "$f"
+    fi
+  done < <(jq -c '.declarations[]' <<< "$ast")
+
+  echo
+
+  # Definitions header
+  if [[ -n "$winningPriority" ]]; then
+    local winning_label
+    winning_label="$(priority_label "$winningPriority")"
+    printf '  %d definitions, winning priority %s (%s):\n\n' "$def_count" "$winningPriority" "$winning_label"
+  else
+    printf '  %d definitions:\n\n' "$def_count"
+  fi
+
+  # Definitions
+  while IFS= read -r def; do
+    render_def "$def"
+    echo
+  done < <(jq -c '.definitions[]' <<< "$ast")
+}
+
+render_def() {
+  local def="$1"
+
+  local file line priority priorityKind value wins guard_eval guard_src
+  file=$(jq -r '.file // "<unknown>"' <<< "$def")
+  line=$(jq -r '.line // empty' <<< "$def")
+  priority=$(jq -r '.priority // "null"' <<< "$def")
+  priorityKind=$(jq -r '.priorityKind // empty' <<< "$def")
+  value=$(jq -c '.value' <<< "$def")
+  wins=$(jq -r '.wins' <<< "$def")
+  guard_eval=$(jq -r '.guardedBy.evaluatedTo // empty' <<< "$def")
+  guard_src=$(jq -r '.guardedBy.source // empty' <<< "$def")
+
+  local marker_glyph="  "
+  if [[ "$wins" == "true" ]]; then
+    marker_glyph="${C_GREEN}✓${C_RESET}"
+  fi
+
+  local pos="$file"
+  [[ -n "$line" ]] && pos="${file}:${line}"
+  printf '%b %s\n' "$marker_glyph" "$pos"
+
+  # Priority line with mkIf annotation when guarded.
+  local kind_disp="${priorityKind:-unknown}"
+  local kind_full="$kind_disp"
+  [[ -n "$guard_eval" ]] && kind_full="${kind_disp}, via mkIf"
+
+  local annot=""
+  if [[ "$wins" == "false" && -z "$guard_eval" ]]; then
+    annot="${C_DIM}        ← overridden by higher-priority definitions${C_RESET}"
+  fi
+
+  if [[ "$priority" != "null" ]]; then
+    printf '        priority %s (%s)%s\n' "$priority" "$kind_full" "$annot"
+  else
+    printf '        priority unknown (%s)\n' "$kind_full"
+  fi
+
+  # The contributed value.
+  printf '        → %s\n' "$(render_value "$value" "$max_value")"
+
+  # mkIf condition line, when guarded.
+  if [[ -n "$guard_eval" ]]; then
+    local src_disp="${guard_src:-<source unavailable>}"
+    local filt_annot=""
+    if [[ "$guard_eval" == "false" ]]; then
+      filt_annot="   ${C_DIM}← filtered out${C_RESET}"
+    fi
+    printf '        condition: %s  → %s%s\n' "$src_disp" "$guard_eval" "$filt_annot"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Render
 # ---------------------------------------------------------------------------
 case "$format" in
   json)
     printf '%s\n' "$ast_json"
     ;;
-  *)
-    # tree / brief renderers implemented in commits 16-17. For now, emit
-    # JSON regardless and document the limitation.
-    echo "nix-why-option: tree/brief renderers ship in the next commits; emitting JSON for now" >&2
-    printf '%s\n' "$ast_json"
+  tree)
+    render_tree "$ast_json"
+    ;;
+  brief)
+    # brief renderer lands in commit 17; for now, emit one-liner stub.
+    val="$(printf '%s' "$ast_json" | jq -c '.value')"
+    printf '%s = %s\n' "$option_path" "$(render_value "$val" "$max_value")"
     ;;
 esac
 

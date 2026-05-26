@@ -31,12 +31,13 @@ fi
 # Argv parsing
 # ---------------------------------------------------------------------------
 print_usage() {
-  cat <<'EOF'
+  cat << 'EOF'
 nix-why-option - module-system option resolution debugger
 
 Usage:
   nix-why-option <flake-target> <option-path> [flags]
-  nix-why-option eval <expr> <option-path> [flags]   (v0.2 - not yet implemented)
+  nix-why-option eval <expr> <option-path> [flags]
+  nix-why-option what-sets <flake-target> <option-path> [flags]
 
 Examples:
   nix-why-option .#nixosConfigurations.krach services.openssh.enable
@@ -118,24 +119,39 @@ while (($# > 0)); do
   esac
 done
 
-# Subcommand dispatch: only `eval` is recognised as a subcommand keyword.
+# Subcommand dispatch.
 subcommand=""
-if (("${#positional[@]}" >= 1)) && [[ "${positional[0]}" == "eval" ]]; then
-  subcommand="eval"
-  positional=("${positional[@]:1}")
+if (("${#positional[@]}" >= 1)); then
+  case "${positional[0]}" in
+    eval | what-sets)
+      subcommand="${positional[0]}"
+      positional=("${positional[@]:1}")
+      ;;
+  esac
 fi
 
 if (("${#positional[@]}" != 2)); then
-  if [[ "$subcommand" == "eval" ]]; then
-    echo "nix-why-option eval: expected <expr> <option-path> (got ${#positional[@]} positional args)" >&2
-  else
-    echo "nix-why-option: expected <flake-target> <option-path> (got ${#positional[@]} positional args)" >&2
-  fi
+  case "$subcommand" in
+    eval)
+      echo "nix-why-option eval: expected <expr> <option-path> (got ${#positional[@]} positional args)" >&2
+      ;;
+    what-sets)
+      echo "nix-why-option what-sets: expected <flake-target> <option-path> (got ${#positional[@]} positional args)" >&2
+      ;;
+    *)
+      echo "nix-why-option: expected <flake-target> <option-path> (got ${#positional[@]} positional args)" >&2
+      ;;
+  esac
   print_usage >&2
   exit 64
 fi
 
 option_path="${positional[1]}"
+
+case "$subcommand" in
+  what-sets) library_fn="whatSets" ;;
+  *) library_fn="resolve" ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Build the Nix expression
@@ -173,7 +189,7 @@ let
         flakeOutput = userResult;
       };
 
-  ast = nixWhy.resolve {
+  ast = nixWhy.${library_fn} {
     inherit (adapted) modules specialArgs config options;
     path = "${option_path}";
   };
@@ -245,7 +261,7 @@ let
     flakeOutput = target;
   };
 
-  ast = nixWhy.resolve {
+  ast = nixWhy.${library_fn} {
     inherit (adapted) modules specialArgs config options;
     path = "${option_path}";
   };
@@ -533,15 +549,79 @@ render_brief() {
   fi
 }
 
+render_what_sets() {
+  local ast="$1"
+  local path type isDefined setter_count
+  path=$(jq -r '.path' <<< "$ast")
+  type=$(jq -r '.type // "unknown"' <<< "$ast")
+  isDefined=$(jq -r '.isDefined' <<< "$ast")
+  setter_count=$(jq -r '.setters | length' <<< "$ast")
+
+  printf '%b%s%b : %b%s%b\n' "$C_BOLD" "$path" "$C_RESET" "$C_CYAN" "$type" "$C_RESET"
+  printf '  isDefined %s\n' "$isDefined"
+
+  while IFS= read -r decl; do
+    local f l
+    f=$(jq -r '.file' <<< "$decl")
+    l=$(jq -r '.line // empty' <<< "$decl")
+    if [[ -n "$l" ]]; then
+      printf '  declared  %s:%s\n' "$f" "$l"
+    else
+      printf '  declared  %s\n' "$f"
+    fi
+  done < <(jq -c '.declarations[]' <<< "$ast")
+
+  echo
+
+  printf '  %d module%s set this option:\n\n' "$setter_count" "$(((setter_count == 1) ? "" : "s"))"
+
+  while IFS= read -r setter; do
+    local file line priorityKind guard_eval pos
+    file=$(jq -r '.file // "<unknown>"' <<< "$setter")
+    line=$(jq -r '.line // empty' <<< "$setter")
+    priorityKind=$(jq -r '.priorityKind // "unknown"' <<< "$setter")
+    guard_eval=$(jq -r '.guardedBy.evaluatedTo // empty' <<< "$setter")
+    pos="$file"
+    [[ -n "$line" ]] && pos="${file}:${line}"
+
+    local annotation=""
+    if [[ -n "$guard_eval" ]]; then
+      if [[ "$guard_eval" == "false" ]]; then
+        annotation="  ${C_DIM}(filtered out by mkIf)${C_RESET}"
+      else
+        annotation="  ${C_DIM}(via mkIf, condition held)${C_RESET}"
+      fi
+    fi
+
+    printf '    - %s [%s]%s\n' "$pos" "$priorityKind" "$annotation"
+  done < <(jq -c '.setters[]' <<< "$ast")
+}
+
+render_what_sets_brief() {
+  local ast="$1"
+  local path setter_count
+  path=$(jq -r '.path' <<< "$ast")
+  setter_count=$(jq -r '.setters | length' <<< "$ast")
+  printf '%s: %d setter%s\n' "$path" "$setter_count" "$(((setter_count == 1) ? "" : "s"))"
+}
+
 case "$format" in
   json)
     printf '%s\n' "$ast_json"
     ;;
   tree)
-    render_tree "$ast_json"
+    if [[ "$subcommand" == "what-sets" ]]; then
+      render_what_sets "$ast_json"
+    else
+      render_tree "$ast_json"
+    fi
     ;;
   brief)
-    render_brief "$ast_json"
+    if [[ "$subcommand" == "what-sets" ]]; then
+      render_what_sets_brief "$ast_json"
+    else
+      render_brief "$ast_json"
+    fi
     ;;
 esac
 

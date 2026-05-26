@@ -248,14 +248,23 @@ nix_rc=0
 }
 
 if ((nix_rc != 0)); then
-  # Heuristic: stderr messages from our own throws point at specific
-  # exit codes; anything else is a generic evaluation error.
-  if [[ "$nix_stderr" == *"did not match any of"* || "$nix_stderr" == *"attribute path"* ]]; then
-    echo "$nix_stderr" >&2
-    exit 3
-  fi
-  echo "$nix_stderr" >&2
-  exit 4
+  # Map well-known internal throws to specific exit codes. Anything else
+  # is treated as a generic evaluation error (exit 4).
+  case "$nix_stderr" in
+    *"nix-why-option: '"*"' did not match any of "* | \
+      *"nix-why-option: '"*"' is ambiguous"* | \
+      *"nix-why-option: attribute path '"*"' not found"* | \
+      *"nix-why-option: no attribute path given after"* | \
+      *"nix-why: could not detect adapter"* | \
+      *"nix-why: unknown adapter"*)
+      echo "$nix_stderr" >&2
+      exit 3
+      ;;
+    *)
+      echo "$nix_stderr" >&2
+      exit 4
+      ;;
+  esac
 fi
 
 # ---------------------------------------------------------------------------
@@ -440,6 +449,28 @@ render_def() {
 # ---------------------------------------------------------------------------
 # Render
 # ---------------------------------------------------------------------------
+render_brief() {
+  local ast="$1"
+  local path value isDefined winningPriority def_count file_count
+  path=$(jq -r '.path' <<< "$ast")
+  value=$(jq -c '.value' <<< "$ast")
+  isDefined=$(jq -r '.isDefined' <<< "$ast")
+  winningPriority=$(jq -r '.winningPriority // "null"' <<< "$ast")
+  def_count=$(jq -r '.definitions | length' <<< "$ast")
+  file_count=$(jq -r '[.definitions[].file] | unique | length' <<< "$ast")
+
+  if [[ "$isDefined" == "true" ]]; then
+    printf '%s = %s  (prio %s, %d defs across %d files)\n' \
+      "$path" \
+      "$(render_value "$value" "$max_value")" \
+      "$winningPriority" \
+      "$def_count" \
+      "$file_count"
+  else
+    printf '%s = <not defined>\n' "$path"
+  fi
+}
+
 case "$format" in
   json)
     printf '%s\n' "$ast_json"
@@ -448,9 +479,7 @@ case "$format" in
     render_tree "$ast_json"
     ;;
   brief)
-    # brief renderer lands in commit 17; for now, emit one-liner stub.
-    val="$(printf '%s' "$ast_json" | jq -c '.value')"
-    printf '%s = %s\n' "$option_path" "$(render_value "$val" "$max_value")"
+    render_brief "$ast_json"
     ;;
 esac
 

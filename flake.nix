@@ -21,6 +21,36 @@
       eachSystem = nixpkgs.lib.genAttrs (import systems);
       pkgsFor = system: nixpkgs.legacyPackages.${system};
       treefmtEval = eachSystem (system: treefmt-nix.lib.evalModule (pkgsFor system) ./treefmt.nix);
+
+      mkNixWhyOption =
+        pkgs:
+        pkgs.stdenv.mkDerivation {
+          pname = "nix-why-option";
+          version = "0.1.0-pre";
+          src = ./.;
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          dontConfigure = true;
+          dontBuild = true;
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out/bin $out/share/nix-why
+            cp -r lib $out/share/nix-why/lib
+            install -Dm755 cli/nix-why-option $out/bin/nix-why-option
+            wrapProgram $out/bin/nix-why-option \
+              --set NIX_WHY_LIB $out/share/nix-why/lib \
+              --prefix PATH : ${nixpkgs.lib.makeBinPath [
+                pkgs.jq
+                pkgs.nix
+              ]}
+            runHook postInstall
+          '';
+          meta = {
+            description = "Module-system option resolution debugger";
+            mainProgram = "nix-why-option";
+            license = nixpkgs.lib.licenses.mit;
+            platforms = nixpkgs.lib.platforms.unix;
+          };
+        };
     in
     {
       # The strategic asset: pure Nix introspection library. System-
@@ -28,11 +58,53 @@
       #   inputs.nix-why.lib.resolve { options, modules, path, ... }
       lib = import ./lib { inherit (nixpkgs) lib; };
 
+      packages = eachSystem (system: rec {
+        nix-why-option = mkNixWhyOption (pkgsFor system);
+        default = nix-why-option;
+      });
+
+      apps = eachSystem (system: {
+        option = {
+          type = "app";
+          program = "${self.packages.${system}.nix-why-option}/bin/nix-why-option";
+        };
+        default = self.apps.${system}.option;
+      });
+
       formatter = eachSystem (system: treefmtEval.${system}.config.build.wrapper);
 
-      checks = eachSystem (system: {
-        treefmt = treefmtEval.${system}.config.build.check self;
-      });
+      checks = eachSystem (
+        system:
+        let
+          pkgs = pkgsFor system;
+          libResult = import ./tests/lib.nix { inherit pkgs; };
+        in
+        {
+          treefmt = treefmtEval.${system}.config.build.check self;
+
+          # Pure-Nix unit tests via lib.runTests. The library evaluation
+          # happens at flake-eval time; the runCommand below is a tiny
+          # success marker, no IFD beyond the toJSON failure report.
+          lib-tests =
+            if libResult.pass then
+              pkgs.runCommand "nix-why-lib-tests" { } ''
+                echo "${libResult.summary}"
+                touch $out
+              ''
+            else
+              throw "nix-why: lib tests failed (${libResult.summary}): ${
+                builtins.toJSON (map (r: r.name) libResult.failures)
+              }";
+
+          # CLI-surface bats tests; no Nix evaluation required at test
+          # runtime (all tests in cli.bats cover argv / help / error
+          # paths that do not invoke `nix eval`).
+          cli-tests = pkgs.runCommand "nix-why-cli-tests" { buildInputs = [ pkgs.bats ]; } ''
+            ${pkgs.bats}/bin/bats ${./tests/cli.bats}
+            touch $out
+          '';
+        }
+      );
 
       devShells = eachSystem (system: {
         default = (pkgsFor system).mkShellNoCC {
@@ -45,6 +117,10 @@
             deadnix
             jq
           ];
+          shellHook = ''
+            export NIX_WHY_LIB="$PWD/lib"
+            echo "nix-why dev shell. NIX_WHY_LIB=$NIX_WHY_LIB"
+          '';
         };
       });
     };

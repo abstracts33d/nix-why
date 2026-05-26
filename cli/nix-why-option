@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+# nix-why-option - module-system option resolution debugger
+#
+# Given a flake target and an option path, prints the option's final
+# value plus every contributing definition with file:line, priority
+# annotation, and mkIf condition.
+#
+# Usage:
+#   nix-why-option <flake-target> <option-path> [flags]
+#   nix-why-option eval <expr> <option-path> [flags]   # v0.2 stub
+#
+# See `nix-why-option --help` for full flag reference.
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Configuration: where to find the nix-why library
+# ---------------------------------------------------------------------------
+# The packaged binary sets NIX_WHY_LIB at wrap time. For local
+# development from a clone, the user can either set NIX_WHY_LIB
+# explicitly or rely on the relative-to-script fallback.
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+: "${NIX_WHY_LIB:=${self_dir}/../lib}"
+
+if [[ ! -f "${NIX_WHY_LIB}/default.nix" ]]; then
+  echo "nix-why-option: NIX_WHY_LIB does not point at a valid library directory: ${NIX_WHY_LIB}" >&2
+  exit 64
+fi
+
+# ---------------------------------------------------------------------------
+# Argv parsing
+# ---------------------------------------------------------------------------
+print_usage() {
+  cat <<'EOF'
+nix-why-option - module-system option resolution debugger
+
+Usage:
+  nix-why-option <flake-target> <option-path> [flags]
+  nix-why-option eval <expr> <option-path> [flags]   (v0.2 - not yet implemented)
+
+Examples:
+  nix-why-option .#nixosConfigurations.krach services.openssh.enable
+  nix-why-option .#krach services.openssh.enable     (shorthand schema autodetect)
+  nix-why-option .#homeConfigurations."s33d@krach" programs.git.userEmail
+
+Flags:
+  --json              Emit the full introspection AST as JSON
+  --brief, -b         One-line output: <path> = <value>  (...)
+  --no-color          Force-disable ANSI escapes (also respects NO_COLOR)
+  --max-value N       Truncate value rendering past N characters (default 200)
+  --show-trace        Pass through to nix eval for debugging the tool itself
+  --adapter <name>    Force a specific adapter
+                      (nixos | home-manager | nix-darwin | flake-parts | raw)
+  -h, --help          Show this help
+
+Exit codes:
+  0   option resolved
+  1   option declared but not defined
+  2   option does not exist
+  3   flake target not found or wrong schema
+  4   evaluation error (passed through from nix eval)
+  64  usage error
+EOF
+}
+
+format="tree"
+adapter_name=""
+max_value=200
+no_color=0
+show_trace=0
+positional=()
+
+# Color autodetect: disabled if NO_COLOR is set or stdout is not a TTY.
+if [[ -n "${NO_COLOR:-}" ]] || ! [[ -t 1 ]]; then
+  no_color=1
+fi
+
+while (($# > 0)); do
+  case "$1" in
+    --json) format="json"; shift ;;
+    --brief | -b) format="brief"; shift ;;
+    --no-color) no_color=1; shift ;;
+    --max-value)
+      max_value="$2"
+      shift 2
+      ;;
+    --max-value=*)
+      max_value="${1#*=}"
+      shift
+      ;;
+    --show-trace) show_trace=1; shift ;;
+    --adapter)
+      adapter_name="$2"
+      shift 2
+      ;;
+    --adapter=*)
+      adapter_name="${1#*=}"
+      shift
+      ;;
+    -h | --help)
+      print_usage
+      exit 0
+      ;;
+    --)
+      shift
+      positional+=("$@")
+      break
+      ;;
+    -*)
+      echo "nix-why-option: unknown flag '$1'" >&2
+      print_usage >&2
+      exit 64
+      ;;
+    *)
+      positional+=("$1")
+      shift
+      ;;
+  esac
+done
+
+# Subcommand dispatch: only `eval` is recognised as a subcommand keyword.
+subcommand=""
+if (("${#positional[@]}" >= 1)) && [[ "${positional[0]}" == "eval" ]]; then
+  subcommand="eval"
+  positional=("${positional[@]:1}")
+fi
+
+if [[ "$subcommand" == "eval" ]]; then
+  echo "nix-why-option: 'eval' subcommand is planned for v0.2 (not yet implemented)" >&2
+  echo "See docs/roadmap/v0.2-conflicts.md (in the source repo) for status." >&2
+  exit 64
+fi
+
+if (("${#positional[@]}" != 2)); then
+  echo "nix-why-option: expected <flake-target> <option-path> (got ${#positional[@]} positional args)" >&2
+  print_usage >&2
+  exit 64
+fi
+
+flake_target="${positional[0]}"
+option_path="${positional[1]}"
+
+# ---------------------------------------------------------------------------
+# Flake target discovery
+# ---------------------------------------------------------------------------
+# Split <flake-ref>#<attr-path>. If no '#', treat the whole thing as a flake
+# ref pointing at a flake whose default attribute is the target.
+if [[ "$flake_target" == *"#"* ]]; then
+  flake_ref="${flake_target%%#*}"
+  attr_expr="${flake_target#*#}"
+else
+  flake_ref="$flake_target"
+  attr_expr=""
+fi
+
+# Default flake ref shorthand: '.' means current directory
+if [[ -z "$flake_ref" ]]; then
+  flake_ref="."
+fi
+
+# ---------------------------------------------------------------------------
+# Build the Nix expression
+# ---------------------------------------------------------------------------
+# The expression:
+#   1. Imports nix-why's library from NIX_WHY_LIB
+#   2. Imports the user's flake via builtins.getFlake
+#   3. Resolves the attr path (with shorthand autodetect when needed)
+#   4. Adapts the result + calls resolve
+#   5. Returns the AST as JSON
+#
+# Shorthand: when attr_expr does NOT start with one of the known schema
+# prefixes, we try each schema in order and use the first hit.
+
+nix_expr=$(cat <<NIXEXPR
+let
+  lib = (import <nixpkgs> { }).lib;
+  nixWhy = import ${NIX_WHY_LIB} { inherit lib; };
+  flake = builtins.getFlake ("${flake_ref}");
+
+  schemas = [
+    "nixosConfigurations"
+    "darwinConfigurations"
+    "homeConfigurations"
+  ];
+
+  attr = "${attr_expr}";
+
+  # Resolve the attr path against the flake.
+  resolveAttr =
+    let
+      parts = lib.splitString "." attr;
+      headPart = builtins.head parts;
+      tailParts = builtins.tail parts;
+    in
+    if attr == "" then
+      throw "nix-why-option: no attribute path given after '#'"
+    else if lib.elem headPart schemas then
+      # Already explicit: nixosConfigurations.<name> etc.
+      lib.attrByPath parts (throw "nix-why-option: attribute path '\${attr}' not found in flake") flake
+    else
+      # Shorthand: try each schema for a top-level match
+      let
+        tries = lib.filter (s: lib.hasAttrByPath ([ s ] ++ parts) flake) schemas;
+      in
+      if tries == [ ] then
+        throw "nix-why-option: '\${attr}' did not match any of \${lib.concatStringsSep ", " schemas} in the flake. Use the explicit form (e.g. .#nixosConfigurations.\${attr})"
+      else if (builtins.length tries) > 1 then
+        throw "nix-why-option: '\${attr}' is ambiguous - found under \${lib.concatStringsSep ", " tries}. Use the explicit form."
+      else
+        lib.attrByPath ([ builtins.head tries ] ++ parts) (throw "unreachable") flake;
+
+  target = resolveAttr;
+
+  adapter_name = "${adapter_name}";
+
+  adapted = nixWhy.adapters.adapt {
+    name = if adapter_name == "" then null else adapter_name;
+    flakeOutput = target;
+  };
+
+  ast = nixWhy.resolve {
+    inherit (adapted) modules specialArgs config options;
+    path = "${option_path}";
+  };
+in
+ast
+NIXEXPR
+)
+
+# ---------------------------------------------------------------------------
+# Invoke nix eval
+# ---------------------------------------------------------------------------
+nix_eval_args=(--impure --json --expr "${nix_expr}")
+if ((show_trace)); then
+  nix_eval_args+=(--show-trace)
+fi
+
+# Capture stdout and stderr separately so we can distinguish evaluation
+# failures (exit 4) from option-not-found (exit 2 / 3) reported via the
+# AST `kind` field.
+ast_json=""
+nix_stderr=""
+nix_rc=0
+{
+  ast_json="$(nix eval "${nix_eval_args[@]}" 2> /tmp/nix-why-option.stderr.$$)" || nix_rc=$?
+  nix_stderr="$(cat /tmp/nix-why-option.stderr.$$)"
+  rm -f /tmp/nix-why-option.stderr.$$
+}
+
+if ((nix_rc != 0)); then
+  # Heuristic: stderr messages from our own throws point at specific
+  # exit codes; anything else is a generic evaluation error.
+  if [[ "$nix_stderr" == *"did not match any of"* || "$nix_stderr" == *"attribute path"* ]]; then
+    echo "$nix_stderr" >&2
+    exit 3
+  fi
+  echo "$nix_stderr" >&2
+  exit 4
+fi
+
+# ---------------------------------------------------------------------------
+# Inspect AST `kind` field for the early-exit cases
+# ---------------------------------------------------------------------------
+kind="$(printf '%s' "$ast_json" | jq -r '.kind')"
+case "$kind" in
+  "option")
+    # Defined or not, full output below. Exit code 1 if not defined.
+    ;;
+  "not-found")
+    echo "nix-why-option: option '${option_path}' does not exist" >&2
+    exit 2
+    ;;
+  "not-an-option")
+    echo "nix-why-option: '${option_path}' exists in the options tree but is not a leaf option" >&2
+    exit 2
+    ;;
+  *)
+    echo "nix-why-option: unexpected AST kind '${kind}'" >&2
+    exit 4
+    ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Render
+# ---------------------------------------------------------------------------
+case "$format" in
+  json)
+    printf '%s\n' "$ast_json"
+    ;;
+  *)
+    # tree / brief renderers implemented in commits 16-17. For now, emit
+    # JSON regardless and document the limitation.
+    echo "nix-why-option: tree/brief renderers ship in the next commits; emitting JSON for now" >&2
+    printf '%s\n' "$ast_json"
+    ;;
+esac
+
+# moduleWalkAvailable=false triggers the documented stderr warning.
+if [[ "$(printf '%s' "$ast_json" | jq -r '.moduleWalkAvailable')" == "false" ]]; then
+  echo "warning: nix-why-option: module-walk introspection unavailable" >&2
+  echo "         (per-definition priorities and line numbers will be missing)" >&2
+  echo "         opt-in: set _module.args.modules = <your module list> in your config" >&2
+fi
+
+# Exit 1 when defined-but-empty, 0 when properly defined.
+is_defined="$(printf '%s' "$ast_json" | jq -r '.isDefined')"
+if [[ "$is_defined" == "false" ]]; then
+  exit 1
+fi
+exit 0

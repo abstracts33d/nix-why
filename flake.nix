@@ -23,6 +23,11 @@
       treefmtEval = eachSystem (system: treefmt-nix.lib.evalModule (pkgsFor system) ./treefmt.nix);
     in
     {
+      # The strategic asset: pure Nix introspection library. System-
+      # agnostic; consumers do:
+      #   inputs.nix-why.lib.resolve { options, modules, path, ... }
+      lib = import ./lib { inherit (nixpkgs) lib; };
+
       formatter = eachSystem (system: treefmtEval.${system}.config.build.wrapper);
 
       checks = eachSystem (system: {

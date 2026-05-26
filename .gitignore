@@ -1,0 +1,10 @@
+result
+result-*
+.direnv/
+.envrc.local
+.pre-commit-config.yaml.local
+*.swp
+.DS_Store
+
+# Keep design + roadmap docs local for now
+docs/

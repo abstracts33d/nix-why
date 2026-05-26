@@ -3,18 +3,27 @@
 > Why is this NixOS / home-manager / nix-darwin option set to this value?
 
 `nix-why` is an umbrella for small, focused tools that answer diagnostic
-questions about a Nix evaluation. The first tool, `nix-why-option`, explains
-exactly *why* an option has the value it has: final value, declaration
-sites, every contributing definition with file, line, priority annotation,
-and `mkIf` condition.
+questions about a Nix evaluation. The current binary, `nix-why-option`,
+explains exactly why an option has the value it has and helps you discover
+where options come from in the first place.
 
 ## Status
 
-**Pre-release.** The design is approved; implementation has not started.
-See [docs/design/2026-05-26-design.md](docs/design/2026-05-26-design.md) for
-the full design.
+Pre-release. Library and CLI are functionally complete through the
+roadmap's v0.3 milestone (option resolution, conflict explanation,
+reverse lookup, search). Documentation is local-only under `docs/`
+while the design stabilises.
 
-## Example (target output, v0.1)
+## Subcommands
+
+| Subcommand | Purpose |
+|---|---|
+| (default) | resolve a single option to its final value with full provenance |
+| `eval <expr>` | same, against an arbitrary Nix expression (raw evalModules or a flake output) |
+| `what-sets` | list every module that defines an option, regardless of whether it won |
+| `search <pattern>` | find option paths in the target by infix pattern |
+
+## Example: resolve
 
 ```text
 $ nix-why-option .#nixosConfigurations.krach services.openssh.enable
@@ -30,19 +39,91 @@ services.openssh.enable : bool
         → true
 
     modules/profiles/operator.nix:8
-        priority 1500 (mkDefault)        ← overridden by higher-priority definitions
+        priority 1000 (mkDefault)        ← overridden by higher-priority definitions
         → true
 
     modules/common/global/base.nix:42
         priority 100  (default, via mkIf)
         → true
-        condition: config.fleet.server.enable  → true
+        condition: config.fleet.server.enable  → false   ← filtered out
 ```
 
-## Documentation
+## Example: search and what-sets (discovery loop)
 
-- [Design spec](docs/design/2026-05-26-design.md) - canonical design document.
-- [Docs index](docs/README.md) - full documentation tree.
+```sh
+$ nix-why-option search .#nixosConfigurations.krach ssh
+# -> candidate paths (services.openssh.enable, services.openssh.port, ...)
+
+$ nix-why-option what-sets .#nixosConfigurations.krach services.openssh.enable
+# -> list of modules that contain a definition for the option
+```
+
+## Flags
+
+| Flag | Purpose |
+|---|---|
+| `--json` | Emit the full introspection AST as JSON. The stable contract for tool integrations. |
+| `--brief` / `-b` | One-line output. |
+| `--no-color` | Force-disable ANSI (also respects `NO_COLOR`). |
+| `--max-value N` | Truncate value rendering past N characters (default 200). |
+| `--show-trace` | Pass through to underlying `nix eval`. |
+| `--adapter <name>` | Force a specific adapter (`nixos` / `home-manager` / `nix-darwin` / `flake-parts` / `raw`). |
+| `--limit N` | (search only) Cap the result count. 0 disables truncation. Default 50. |
+
+## Install
+
+```sh
+# One-off
+nix run github:abstracts33d/nix-why -- .#krach services.openssh.enable
+
+# Profile install
+nix profile install github:abstracts33d/nix-why
+
+# As a flake input + system package
+inputs.nix-why.url = "github:abstracts33d/nix-why";
+# then in your NixOS / nix-darwin / home-manager config:
+environment.systemPackages = [ inputs.nix-why.packages.${system}.default ];
+```
+
+## Library
+
+The Nix introspection library is exposed as a system-agnostic flake
+output:
+
+```nix
+inputs.nix-why.lib.resolve { modules, specialArgs ? {}, config, options, path }
+inputs.nix-why.lib.whatSets { modules, specialArgs ? {}, config, options, path }
+inputs.nix-why.lib.search { options, pattern, limit ? 50 }
+inputs.nix-why.lib.adapters.adapt { name ? null, flakeOutput }
+```
+
+The library is the strategic asset; the bash CLI is a thin renderer
+over its JSON output.
+
+## Opt-in: full module-walk fidelity
+
+By default the library degrades gracefully to options-surface fidelity
+because NixOS / home-manager / nix-darwin do not expose the raw modules
+list. To enable full per-definition line numbers and mkIf source
+extraction, opt in by setting in your config:
+
+```nix
+_module.args.modules = <the same modules list passed to nixosSystem/lib.evalModules>;
+```
+
+The library reads this from the evaluated config and feeds it to the
+module-walk introspection pass.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | option resolved (or search returned matches) |
+| 1 | option declared but not defined |
+| 2 | option does not exist / no search matches |
+| 3 | flake target not found or wrong schema |
+| 4 | evaluation error (passed through from `nix eval`) |
+| 64 | usage error |
 
 ## License
 

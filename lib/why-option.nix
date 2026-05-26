@@ -117,6 +117,21 @@ in
             fromModulesDefs = moduleWalk.definitions;
             winningPriority = surface.winningPriority;
           };
+
+      # An unresolvable merge surfaces as a non-null surface.valueError
+      # (tryEval failed on opt.value). The conflicts block lists the
+      # definitions that were involved at the winning priority.
+      conflicts =
+        if surface.kind == "option" && (surface.valueError or null) != null then
+          [
+            {
+              kind = "merge-conflict";
+              message = surface.valueError;
+              involvedDefinitions = lib.filter (d: d.wins) mergedDefinitions;
+            }
+          ]
+        else
+          [ ];
     in
     {
       inherit (surface)
@@ -128,7 +143,9 @@ in
         winningPriority
         declarations
         ;
+      valueError = surface.valueError or null;
       definitions = mergedDefinitions;
+      inherit conflicts;
       moduleWalkAvailable = moduleWalk.definitions != [ ];
     };
 

@@ -218,6 +218,64 @@ in
       moduleWalkAvailable = moduleWalk.definitions != [ ];
     };
 
+  # search :: { options, pattern, limit ? 50 } -> { pattern, matches, truncated, totalMatches }
+  #
+  # v0.3 discovery. Walks the options tree depth-first collecting all
+  # leaf option paths (`_type == "option"`), then filters by infix
+  # pattern match against the dotted path. Used by `nix-why-option
+  # search` to find the right option name from a fuzzy symptom.
+  #
+  # Returns at most `limit` matches; `truncated` indicates whether more
+  # were available.
+  search =
+    {
+      options,
+      pattern,
+      limit ? 50,
+    }:
+    let
+      collectAllOptions =
+        prefix: attrs:
+        let
+          names = builtins.attrNames attrs;
+        in
+        lib.concatMap (
+          name:
+          let
+            value = attrs.${name};
+            here = prefix ++ [ name ];
+            herePath = lib.concatStringsSep "." here;
+            isAttr = builtins.isAttrs value;
+            isOption = isAttr && ((value._type or null) == "option");
+            isContainer = isAttr && !isOption;
+          in
+          if isOption then
+            [
+              {
+                path = herePath;
+                type = value.type.name or null;
+                declarations = value.declarations or [ ];
+                isDefined = value.isDefined or false;
+              }
+            ]
+          else if isContainer then
+            collectAllOptions here value
+          else
+            [ ]
+        ) names;
+
+      all = collectAllOptions [ ] options;
+      matches = lib.filter (entry: lib.hasInfix pattern entry.path) all;
+      total = builtins.length matches;
+      truncated = limit > 0 && total > limit;
+      shown = if truncated then lib.sublist 0 limit matches else matches;
+    in
+    {
+      inherit pattern truncated;
+      matches = shown;
+      totalMatches = total;
+    };
+
   # render :: { ast, format ? "tree", maxValue ? 200, noColor ? false } -> string
   #
   # In-Nix render is a stub; the production CLI ships its own bash

@@ -125,53 +125,83 @@ if (("${#positional[@]}" >= 1)) && [[ "${positional[0]}" == "eval" ]]; then
   positional=("${positional[@]:1}")
 fi
 
-if [[ "$subcommand" == "eval" ]]; then
-  echo "nix-why-option: 'eval' subcommand is planned for v0.2 (not yet implemented)" >&2
-  echo "See docs/roadmap/v0.2-conflicts.md (in the source repo) for status." >&2
-  exit 64
-fi
-
 if (("${#positional[@]}" != 2)); then
-  echo "nix-why-option: expected <flake-target> <option-path> (got ${#positional[@]} positional args)" >&2
+  if [[ "$subcommand" == "eval" ]]; then
+    echo "nix-why-option eval: expected <expr> <option-path> (got ${#positional[@]} positional args)" >&2
+  else
+    echo "nix-why-option: expected <flake-target> <option-path> (got ${#positional[@]} positional args)" >&2
+  fi
   print_usage >&2
   exit 64
 fi
 
-flake_target="${positional[0]}"
 option_path="${positional[1]}"
-
-# ---------------------------------------------------------------------------
-# Flake target discovery
-# ---------------------------------------------------------------------------
-# Split <flake-ref>#<attr-path>. If no '#', treat the whole thing as a flake
-# ref pointing at a flake whose default attribute is the target.
-if [[ "$flake_target" == *"#"* ]]; then
-  flake_ref="${flake_target%%#*}"
-  attr_expr="${flake_target#*#}"
-else
-  flake_ref="$flake_target"
-  attr_expr=""
-fi
-
-# Default flake ref shorthand: '.' means current directory
-if [[ -z "$flake_ref" ]]; then
-  flake_ref="."
-fi
 
 # ---------------------------------------------------------------------------
 # Build the Nix expression
 # ---------------------------------------------------------------------------
-# The expression:
-#   1. Imports nix-why's library from NIX_WHY_LIB
-#   2. Imports the user's flake via builtins.getFlake
-#   3. Resolves the attr path (with shorthand autodetect when needed)
-#   4. Adapts the result + calls resolve
-#   5. Returns the AST as JSON
-#
-# Shorthand: when attr_expr does NOT start with one of the known schema
-# prefixes, we try each schema in order and use the first hit.
+# Two flavours, one shared post-processing:
+#   - default subcommand: positional[0] is a flake target (.#krach ...);
+#     the expression imports the flake, resolves the attr (with optional
+#     schema shorthand), and dispatches via the adapter table.
+#   - eval subcommand: positional[0] is an arbitrary Nix expression;
+#     the expression evaluates it and dispatches based on shape (raw
+#     adapter when the result has a `modules` field, otherwise the
+#     normal autodetect via .config + .options).
 
-nix_expr=$(cat <<NIXEXPR
+if [[ "$subcommand" == "eval" ]]; then
+  user_expr="${positional[0]}"
+
+  nix_expr=$(
+    cat << NIXEXPR
+let
+  lib = (import <nixpkgs> { }).lib;
+  nixWhy = import ${NIX_WHY_LIB} { inherit lib; };
+
+  userResult = (${user_expr});
+
+  adapter_name = "${adapter_name}";
+
+  isRawInput = builtins.isAttrs userResult && (userResult ? modules);
+
+  adapted =
+    if adapter_name == "raw" || isRawInput then
+      nixWhy.adapters.byName.raw userResult
+    else
+      nixWhy.adapters.adapt {
+        name = if adapter_name == "" then null else adapter_name;
+        flakeOutput = userResult;
+      };
+
+  ast = nixWhy.resolve {
+    inherit (adapted) modules specialArgs config options;
+    path = "${option_path}";
+  };
+in
+ast
+NIXEXPR
+  )
+
+else
+  flake_target="${positional[0]}"
+
+  # Split <flake-ref>#<attr-path>. If no '#', treat the whole thing as a
+  # flake ref pointing at a flake whose default attribute is the target.
+  if [[ "$flake_target" == *"#"* ]]; then
+    flake_ref="${flake_target%%#*}"
+    attr_expr="${flake_target#*#}"
+  else
+    flake_ref="$flake_target"
+    attr_expr=""
+  fi
+
+  # Default flake ref shorthand: '.' means current directory.
+  if [[ -z "$flake_ref" ]]; then
+    flake_ref="."
+  fi
+
+  nix_expr=$(
+    cat << NIXEXPR
 let
   lib = (import <nixpkgs> { }).lib;
   nixWhy = import ${NIX_WHY_LIB} { inherit lib; };
@@ -185,7 +215,6 @@ let
 
   attr = "${attr_expr}";
 
-  # Resolve the attr path against the flake.
   resolveAttr =
     let
       parts = lib.splitString "." attr;
@@ -195,10 +224,8 @@ let
     if attr == "" then
       throw "nix-why-option: no attribute path given after '#'"
     else if lib.elem headPart schemas then
-      # Already explicit: nixosConfigurations.<name> etc.
       lib.attrByPath parts (throw "nix-why-option: attribute path '\${attr}' not found in flake") flake
     else
-      # Shorthand: try each schema for a top-level match
       let
         tries = lib.filter (s: lib.hasAttrByPath ([ s ] ++ parts) flake) schemas;
       in
@@ -225,7 +252,8 @@ let
 in
 ast
 NIXEXPR
-)
+  )
+fi
 
 # ---------------------------------------------------------------------------
 # Invoke nix eval

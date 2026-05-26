@@ -46,10 +46,16 @@ setup() {
   [[ "$output" == *"unknown flag"* ]]
 }
 
-@test "usage: eval subcommand is stubbed -> exit 64" {
-  run "${CLI}" eval '(lib.evalModules {})' foo.bar
+@test "usage: eval subcommand with no positional args -> exit 64" {
+  run "${CLI}" eval
   [ "$status" -eq 64 ]
-  [[ "$output" == *"not yet implemented"* ]]
+  [[ "$output" == *"expected <expr> <option-path>"* ]]
+}
+
+@test "usage: eval subcommand with one positional -> exit 64" {
+  run "${CLI}" eval '({modules=[];})'
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"expected <expr> <option-path>"* ]]
 }
 
 @test "library: NIX_WHY_LIB pointing at nonexistent dir -> exit 64" {

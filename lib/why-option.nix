@@ -1,16 +1,88 @@
 { lib, internal }:
 let
   splitPath = path: lib.splitString "." path;
+
+  # A definition wins iff it survives both the priority filter AND every
+  # mkIf condition on its way down evaluated true.
+  computeWins =
+    winningPriority: def:
+    let
+      priorityOk = def.priority == winningPriority;
+      guardOk = def.guardedBy == null || def.guardedBy.evaluatedTo;
+    in
+    priorityOk && guardOk;
+
+  # Replace `guardedBy.source = null` with the extracted source text
+  # (when extraction succeeds). Best-effort; on failure leaves null.
+  fillGuardSource =
+    def:
+    if def.guardedBy == null then
+      def
+    else
+      let
+        src = internal.extractMkIfCondition {
+          file = def.file;
+          line = def.line;
+          column = def.column or 1;
+        };
+      in
+      def
+      // {
+        guardedBy = {
+          inherit (def.guardedBy) evaluatedTo;
+          source = src;
+        };
+      };
+
+  # Drop transient fields and ensure JSON-friendly shape.
+  finalizeDef = def: {
+    inherit (def)
+      file
+      line
+      priority
+      priorityKind
+      guardedBy
+      value
+      wins
+      ;
+  };
+
+  # Merge from-options (canonical winners, file-only) with from-modules
+  # (all defs incl. losers, with full line + priority + guard info).
+  #
+  # When the module-walk produced nothing (adapter could not recover the
+  # raw modules), we fall back to options-surface output: each surviving
+  # definition is rendered as a winner with line/priorityKind/guardedBy
+  # left null and a single stderr-style warning emitted.
+  mergeDefinitions =
+    {
+      fromOptionsDefs,
+      fromModulesDefs,
+      winningPriority,
+    }:
+    let
+      useModuleWalk = fromModulesDefs != [ ];
+    in
+    if useModuleWalk then
+      map (
+        def:
+        finalizeDef (fillGuardSource (def // { wins = computeWins winningPriority def; }))
+      ) fromModulesDefs
+    else
+      map (
+        def:
+        finalizeDef (def // { wins = true; })
+      ) fromOptionsDefs;
 in
 {
   # resolve :: { modules, specialArgs ? {}, config, options, path } -> AST
   #
-  # Returns a structured introspection AST for a single option path.
-  # The AST is the stable JSON contract documented in
-  # docs/reference/json-schema.md (planned).
-  #
-  # Full composition lives in commit 8; for now this delegates to the
-  # options-surface pass only.
+  # Composes the options-surface and module-walk introspection passes.
+  # The options-surface pass provides the canonical merge result
+  # (final value, declarations, winning priority); the module-walk pass
+  # enriches each definition with line numbers, priority kind, and
+  # mkIf-guard records. When module-walk is unavailable, the output
+  # degrades gracefully to options-surface fidelity.
   resolve =
     {
       modules ? [ ],
@@ -21,15 +93,50 @@ in
     }:
     let
       pathParts = splitPath path;
-      surfaceResult = internal.fromOptions { inherit options pathParts; };
+
+      surface = internal.fromOptions { inherit options pathParts; };
+      moduleWalk =
+        if surface.kind != "option" then
+          { definitions = [ ]; }
+        else
+          internal.fromModules {
+            inherit
+              modules
+              specialArgs
+              config
+              pathParts
+              ;
+          };
+
+      mergedDefinitions =
+        if surface.kind != "option" then
+          [ ]
+        else
+          mergeDefinitions {
+            fromOptionsDefs = surface.definitions;
+            fromModulesDefs = moduleWalk.definitions;
+            winningPriority = surface.winningPriority;
+          };
     in
-    surfaceResult;
+    {
+      inherit (surface)
+        path
+        kind
+        type
+        value
+        isDefined
+        winningPriority
+        declarations
+        ;
+      definitions = mergedDefinitions;
+      moduleWalkAvailable = moduleWalk.definitions != [ ];
+    };
 
   # render :: { ast, format ? "tree", maxValue ? 200, noColor ? false } -> string
   #
-  # Renders an introspection AST to a human-readable string. Implemented
-  # in commits 15-17 (CLI-side renderer); this Nix-side function is a
-  # stub used by tests that need a quick textual representation.
+  # The Nix-side renderer is a stub; the production CLI ships its own
+  # bash-based renderers (commits 15-17). This is here so library
+  # consumers can get a quick text view without depending on the CLI.
   render =
     {
       ast,
@@ -37,5 +144,5 @@ in
       maxValue ? 200,
       noColor ? false,
     }:
-    "nix-why: render not yet implemented (format=${format}); use --json and pipe through the CLI renderer";
+    "nix-why: in-Nix render not yet implemented (format=${format}); pass through nix-why-option for the production renderer";
 }

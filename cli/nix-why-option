@@ -38,6 +38,7 @@ Usage:
   nix-why-option <flake-target> <option-path> [flags]
   nix-why-option eval <expr> <option-path> [flags]
   nix-why-option what-sets <flake-target> <option-path> [flags]
+  nix-why-option search <flake-target> <pattern> [flags]
 
 Examples:
   nix-why-option .#nixosConfigurations.krach services.openssh.enable
@@ -52,6 +53,8 @@ Flags:
   --show-trace        Pass through to nix eval for debugging the tool itself
   --adapter <name>    Force a specific adapter
                       (nixos | home-manager | nix-darwin | flake-parts | raw)
+  --limit N           (search only) cap on the number of matches
+                      shown; 0 disables truncation (default 50)
   -h, --help          Show this help
 
 Exit codes:
@@ -69,6 +72,7 @@ adapter_name=""
 max_value=200
 no_color=0
 show_trace=0
+search_limit=50
 positional=()
 
 # Color autodetect: disabled if NO_COLOR is set or stdout is not a TTY.
@@ -90,6 +94,14 @@ while (($# > 0)); do
       shift
       ;;
     --show-trace) show_trace=1; shift ;;
+    --limit)
+      search_limit="$2"
+      shift 2
+      ;;
+    --limit=*)
+      search_limit="${1#*=}"
+      shift
+      ;;
     --adapter)
       adapter_name="$2"
       shift 2
@@ -123,7 +135,7 @@ done
 subcommand=""
 if (("${#positional[@]}" >= 1)); then
   case "${positional[0]}" in
-    eval | what-sets)
+    eval | what-sets | search)
       subcommand="${positional[0]}"
       positional=("${positional[@]:1}")
       ;;
@@ -138,6 +150,9 @@ if (("${#positional[@]}" != 2)); then
     what-sets)
       echo "nix-why-option what-sets: expected <flake-target> <option-path> (got ${#positional[@]} positional args)" >&2
       ;;
+    search)
+      echo "nix-why-option search: expected <flake-target> <pattern> (got ${#positional[@]} positional args)" >&2
+      ;;
     *)
       echo "nix-why-option: expected <flake-target> <option-path> (got ${#positional[@]} positional args)" >&2
       ;;
@@ -146,10 +161,13 @@ if (("${#positional[@]}" != 2)); then
   exit 64
 fi
 
+# For search, positional[1] is a pattern; for the rest it is an option path.
 option_path="${positional[1]}"
+search_pattern="${positional[1]}"
 
 case "$subcommand" in
   what-sets) library_fn="whatSets" ;;
+  search) library_fn="search" ;;
   *) library_fn="resolve" ;;
 esac
 
@@ -189,10 +207,18 @@ let
         flakeOutput = userResult;
       };
 
-  ast = nixWhy.${library_fn} {
-    inherit (adapted) modules specialArgs config options;
-    path = "${option_path}";
-  };
+  ast =
+    if "${library_fn}" == "search" then
+      nixWhy.search {
+        options = adapted.options;
+        pattern = "${search_pattern}";
+        limit = ${search_limit};
+      }
+    else
+      nixWhy.${library_fn} {
+        inherit (adapted) modules specialArgs config options;
+        path = "${option_path}";
+      };
 in
 ast
 NIXEXPR
@@ -261,10 +287,18 @@ let
     flakeOutput = target;
   };
 
-  ast = nixWhy.${library_fn} {
-    inherit (adapted) modules specialArgs config options;
-    path = "${option_path}";
-  };
+  ast =
+    if "${library_fn}" == "search" then
+      nixWhy.search {
+        options = adapted.options;
+        pattern = "${search_pattern}";
+        limit = ${search_limit};
+      }
+    else
+      nixWhy.${library_fn} {
+        inherit (adapted) modules specialArgs config options;
+        path = "${option_path}";
+      };
 in
 ast
 NIXEXPR
@@ -314,24 +348,28 @@ fi
 # ---------------------------------------------------------------------------
 # Inspect AST `kind` field for the early-exit cases
 # ---------------------------------------------------------------------------
-kind="$(printf '%s' "$ast_json" | jq -r '.kind')"
-case "$kind" in
-  "option")
-    # Defined or not, full output below. Exit code 1 if not defined.
-    ;;
-  "not-found")
-    echo "nix-why-option: option '${option_path}' does not exist" >&2
-    exit 2
-    ;;
-  "not-an-option")
-    echo "nix-why-option: '${option_path}' exists in the options tree but is not a leaf option" >&2
-    exit 2
-    ;;
-  *)
-    echo "nix-why-option: unexpected AST kind '${kind}'" >&2
-    exit 4
-    ;;
-esac
+# search returns a different shape (no kind field); the kind-based
+# early-exits below only apply to resolve / whatSets.
+if [[ "$subcommand" != "search" ]]; then
+  kind="$(printf '%s' "$ast_json" | jq -r '.kind')"
+  case "$kind" in
+    "option")
+      # Defined or not, full output below. Exit code 1 if not defined.
+      ;;
+    "not-found")
+      echo "nix-why-option: option '${option_path}' does not exist" >&2
+      exit 2
+      ;;
+    "not-an-option")
+      echo "nix-why-option: '${option_path}' exists in the options tree but is not a leaf option" >&2
+      exit 2
+      ;;
+    *)
+      echo "nix-why-option: unexpected AST kind '${kind}'" >&2
+      exit 4
+      ;;
+  esac
+fi
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -605,34 +643,70 @@ render_what_sets_brief() {
   printf '%s: %d setter%s\n' "$path" "$setter_count" "$(((setter_count == 1) ? "" : "s"))"
 }
 
+render_search() {
+  local ast="$1"
+  local pattern total truncated
+  pattern=$(jq -r '.pattern' <<< "$ast")
+  total=$(jq -r '.totalMatches' <<< "$ast")
+  truncated=$(jq -r '.truncated' <<< "$ast")
+
+  printf 'pattern: %b%s%b\n' "$C_BOLD" "$pattern" "$C_RESET"
+  printf 'matches: %d%s\n\n' "$total" "$([[ "$truncated" == "true" ]] && echo " (truncated; pass --limit 0 for all)")"
+
+  while IFS= read -r match; do
+    local path type isDefined
+    path=$(jq -r '.path' <<< "$match")
+    type=$(jq -r '.type // "?"' <<< "$match")
+    isDefined=$(jq -r '.isDefined' <<< "$match")
+    local marker="  "
+    [[ "$isDefined" == "true" ]] && marker="${C_GREEN}*${C_RESET}"
+    printf '%b %s %b[%s]%b\n' "$marker" "$path" "$C_DIM" "$type" "$C_RESET"
+  done < <(jq -c '.matches[]' <<< "$ast")
+}
+
+render_search_brief() {
+  local ast="$1"
+  jq -r '.matches[].path' <<< "$ast"
+}
+
 case "$format" in
   json)
     printf '%s\n' "$ast_json"
     ;;
   tree)
-    if [[ "$subcommand" == "what-sets" ]]; then
-      render_what_sets "$ast_json"
-    else
-      render_tree "$ast_json"
-    fi
+    case "$subcommand" in
+      what-sets) render_what_sets "$ast_json" ;;
+      search) render_search "$ast_json" ;;
+      *) render_tree "$ast_json" ;;
+    esac
     ;;
   brief)
-    if [[ "$subcommand" == "what-sets" ]]; then
-      render_what_sets_brief "$ast_json"
-    else
-      render_brief "$ast_json"
-    fi
+    case "$subcommand" in
+      what-sets) render_what_sets_brief "$ast_json" ;;
+      search) render_search_brief "$ast_json" ;;
+      *) render_brief "$ast_json" ;;
+    esac
     ;;
 esac
 
-# moduleWalkAvailable=false triggers the documented stderr warning.
-if [[ "$(printf '%s' "$ast_json" | jq -r '.moduleWalkAvailable')" == "false" ]]; then
+# moduleWalkAvailable=false triggers the documented stderr warning. The
+# field is only present on resolve / whatSets ASTs.
+if [[ "$subcommand" != "search" ]] \
+  && [[ "$(printf '%s' "$ast_json" | jq -r '.moduleWalkAvailable')" == "false" ]]; then
   echo "warning: nix-why-option: module-walk introspection unavailable" >&2
   echo "         (per-definition priorities and line numbers will be missing)" >&2
   echo "         opt-in: set _module.args.modules = <your module list> in your config" >&2
 fi
 
-# Exit 1 when defined-but-empty, 0 when properly defined.
+# Exit code: search is 0 if any matches, otherwise treat as not-found.
+if [[ "$subcommand" == "search" ]]; then
+  total="$(printf '%s' "$ast_json" | jq -r '.totalMatches')"
+  if [[ "$total" == "0" ]]; then
+    exit 2
+  fi
+  exit 0
+fi
+
 is_defined="$(printf '%s' "$ast_json" | jq -r '.isDefined')"
 if [[ "$is_defined" == "false" ]]; then
   exit 1

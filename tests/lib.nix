@@ -28,6 +28,15 @@ let
     "mkdefault-chain"
     "mkforce-overrides"
     "mkif-true"
+    "mkif-false"
+    "mkmerge"
+    "list-merge"
+    "nested-submodule"
+    "declared-not-defined"
+    "nonexistent-option"
+    "dup-in-file"
+    "custom-priority"
+    "freeform"
   ];
 
   results = map runFixture fixtureNames;

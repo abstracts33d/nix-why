@@ -24,6 +24,7 @@ let
     };
 
   fixtureNames = [
+    # v0.1
     "basic-bool"
     "mkdefault-chain"
     "mkforce-overrides"
@@ -37,6 +38,9 @@ let
     "dup-in-file"
     "custom-priority"
     "freeform"
+    # v0.2
+    "mkforce-collision"
+    "type-mismatch"
   ];
 
   results = map runFixture fixtureNames;

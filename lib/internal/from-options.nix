@@ -1,17 +1,30 @@
 { lib }:
 let
-  # Safely read opt.value: returns null when the option is undefined or
-  # when reading it throws (some defaults call `throw` to enforce required
-  # configuration).
+  # Safely read opt.value: returns { value, error } where `error` is null
+  # on success and a string message when reading threw. Failure is
+  # treated as a likely merge conflict by the composition layer
+  # (why-option.nix surfaces it as a `conflicts[]` entry in v0.2).
   tryReadValue =
     opt:
     if !(opt.isDefined or false) then
-      null
+      {
+        value = null;
+        error = null;
+      }
     else
       let
         tried = builtins.tryEval opt.value;
       in
-      if tried.success then tried.value else null;
+      if tried.success then
+        {
+          value = tried.value;
+          error = null;
+        }
+      else
+        {
+          value = null;
+          error = "value evaluation failed - likely a merge conflict (mkForce collision, type mismatch, or submodule key collision)";
+        };
 
   # Pair `opt.declarations` (list of file paths) with the matching entry
   # of `opt.declarationPositions` (list of { file, line, column }). Older
@@ -78,6 +91,7 @@ in
         kind = "not-found";
         type = null;
         value = null;
+        valueError = null;
         isDefined = false;
         winningPriority = null;
         declarations = [ ];
@@ -89,17 +103,22 @@ in
         kind = "not-an-option";
         type = null;
         value = null;
+        valueError = null;
         isDefined = false;
         winningPriority = null;
         declarations = [ ];
         definitions = [ ];
       }
     else
+      let
+        readResult = tryReadValue raw;
+      in
       {
         inherit path;
         kind = "option";
         type = raw.type.name or null;
-        value = tryReadValue raw;
+        value = readResult.value;
+        valueError = readResult.error;
         isDefined = raw.isDefined or false;
         winningPriority = raw.highestPrio or null;
         declarations = buildDeclarations raw;

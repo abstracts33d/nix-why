@@ -1,0 +1,63 @@
+name: ci
+
+# CI gates that must pass before any merge to main. Two pieces:
+#
+#   flake-check: per-system `nix flake check` (treefmt, lib-tests,
+#                cli-tests). The lib's evalModules-based tests don't
+#                build anything, so this stays fast across the matrix.
+#
+#   e2e-smoke:   end-to-end CLI exercise against the synthetic flake
+#                under tests/synthetic/. Runs on x86_64-linux only;
+#                the smoke test locks nixpkgs and cannot run in the
+#                Nix flake-check sandbox (which is why it is gated
+#                separately).
+#
+# Matrix coverage:
+#   x86_64-linux   (ubuntu-latest)   - primary; full check + e2e
+#   x86_64-darwin  (macos-13)        - flake-check only
+#   aarch64-darwin (macos-14)        - flake-check only
+#
+# aarch64-linux is not covered yet: GitHub-hosted ARM Linux runners
+# require billed accounts. Add when funding / self-hosting allows.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  flake-check:
+    name: flake check (${{ matrix.system }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            system: x86_64-linux
+          - runner: macos-13
+            system: x86_64-darwin
+          - runner: macos-14
+            system: aarch64-darwin
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: nix flake check
+        run: nix flake check --no-build --print-build-logs
+
+  e2e-smoke:
+    name: e2e smoke (x86_64-linux)
+    runs-on: ubuntu-latest
+    needs: flake-check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: run e2e smoke
+        # tests/synthetic/flake.lock is committed; no lock step here.
+        run: bash tests/smoke/e2e.sh

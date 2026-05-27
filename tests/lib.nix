@@ -165,11 +165,108 @@ let
     inherit (t) passed;
   }) v03Tests;
 
-  results = fixtureResults ++ v03Results;
+  # v0.4 inline tests for whyNot. The fixture pattern would force every
+  # case through `resolve`, so we exercise whyNot directly here.
+  v04Tests =
+    let
+      # Option declared with a user-supplied value. whyNot should report
+      # isExplicitlySet = true and a non-empty explicitDefinitions list.
+      explicitModules = [
+        {
+          options.foo.enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "test";
+          };
+        }
+        { config.foo.enable = true; }
+      ];
+      explicitEval = lib.evalModules { modules = explicitModules ++ [ permissive ]; };
+
+      # Option declared with a default and no user config at all.
+      # whyNot should report isExplicitlySet = false, exactly one entry
+      # in defaultDefinitions (the option's default at priority 1500),
+      # and an empty filteredOutDefinitions.
+      defaultOnlyModules = [
+        {
+          options.foo.enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "test";
+          };
+        }
+      ];
+      defaultOnlyEval = lib.evalModules { modules = defaultOnlyModules ++ [ permissive ]; };
+
+      # Option whose only user-supplied definition is gated by a mkIf
+      # that evaluates to false. whyNot should pick up the gated
+      # definition in filteredOutDefinitions and emit a non-null hint.
+      gatedModules = [
+        {
+          options.foo.enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "test";
+          };
+        }
+        {
+          config.foo.enable = lib.mkIf false true;
+        }
+      ];
+      gatedEval = lib.evalModules { modules = gatedModules ++ [ permissive ]; };
+    in
+    [
+      {
+        name = "whyNot-explicitly-set";
+        passed =
+          let
+            r = nixWhy.whyNot {
+              modules = explicitModules;
+              inherit (explicitEval) options;
+              path = "foo.enable";
+            };
+          in
+          r.isExplicitlySet == true && (builtins.length r.explicitDefinitions) >= 1 && r.hint == null;
+      }
+      {
+        name = "whyNot-default-only";
+        passed =
+          let
+            r = nixWhy.whyNot {
+              modules = defaultOnlyModules;
+              inherit (defaultOnlyEval) options;
+              path = "foo.enable";
+            };
+          in
+          r.isExplicitlySet == false
+          && (builtins.length r.defaultDefinitions) == 1
+          && r.filteredOutDefinitions == [ ]
+          && r.hint == null;
+      }
+      {
+        name = "whyNot-filtered-by-mkIf";
+        passed =
+          let
+            r = nixWhy.whyNot {
+              modules = gatedModules;
+              inherit (gatedEval) options;
+              path = "foo.enable";
+            };
+          in
+          r.isExplicitlySet == false && (builtins.length r.filteredOutDefinitions) >= 1 && r.hint != null;
+      }
+    ];
+
+  v04Results = map (t: {
+    inherit (t) name;
+    inherit (t) passed;
+  }) v04Tests;
+
+  results = fixtureResults ++ v03Results ++ v04Results;
   failures = builtins.filter (r: !r.passed) results;
 in
 {
   inherit results failures;
   pass = failures == [ ];
-  summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline), ${toString (builtins.length failures)} failed";
+  summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline + ${toString (builtins.length v04Results)} v0.4 inline), ${toString (builtins.length failures)} failed";
 }

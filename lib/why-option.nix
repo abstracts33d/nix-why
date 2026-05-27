@@ -77,8 +77,7 @@ let
 
   isTypeDefault = def: def.priority == mkOptionDefaultPriority;
 
-  isFilteredByMkIf =
-    def: def.guardedBy != null && def.guardedBy.evaluatedTo == false;
+  isFilteredByMkIf = def: def.guardedBy != null && def.guardedBy.evaluatedTo == false;
 in
 rec {
   # resolve :: { modules, options, path } -> AST
@@ -252,7 +251,12 @@ rec {
       base = resolve args;
       defs = base.definitions or [ ];
 
-      explicitDefinitions = lib.filter (d: !isTypeDefault d) defs;
+      # "Explicit" means user-supplied AND surviving any mkIf guards on
+      # the way down. A definition that is non-default-priority but
+      # gated out by a false mkIf is not an explicit configuration -
+      # it's a candidate that did not fire, and belongs in
+      # filteredOutDefinitions instead.
+      explicitDefinitions = lib.filter (d: !isTypeDefault d && !isFilteredByMkIf d) defs;
       defaultDefinitions = lib.filter isTypeDefault defs;
       filteredOutDefinitions = lib.filter isFilteredByMkIf defs;
 

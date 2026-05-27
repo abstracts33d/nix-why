@@ -51,6 +51,25 @@ let
 
   fixtureResults = map runFixture fixtureNames;
 
+  # Diagnostic dump for failed fixtures: include a compact summary of
+  # the AST shape so the runCommand error message identifies WHICH
+  # field disagreed with the assertion. Only emitted for failures.
+  failureDiag =
+    r:
+    let
+      a = r.ast;
+    in
+    {
+      name = r.name;
+      kind = a.kind or null;
+      value = a.value or null;
+      isDefined = a.isDefined or null;
+      type = a.type or null;
+      winningPriority = a.winningPriority or null;
+      definitionsCount = builtins.length (a.definitions or [ ]);
+      conflictsCount = builtins.length (a.conflicts or [ ]);
+    };
+
   # v0.3 inline tests for whatSets and search. These don't fit the
   # fixture pattern because they exercise alternate library entry
   # points, not the default resolve path.
@@ -141,9 +160,11 @@ let
 
   results = fixtureResults ++ v03Results;
   failures = builtins.filter (r: !r.passed) results;
+  fixtureFailures = builtins.filter (r: !r.passed) fixtureResults;
 in
 {
   inherit results failures;
+  failureDiagnostics = map failureDiag fixtureFailures;
   pass = failures == [ ];
   summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline), ${toString (builtins.length failures)} failed";
 }

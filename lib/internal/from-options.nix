@@ -4,27 +4,27 @@ let
   # on success and a string message when reading threw. Failure is
   # treated as a likely merge conflict by the composition layer
   # (why-option.nix surfaces it as a `conflicts[]` entry in v0.2).
+  #
+  # We always tryEval opt.value regardless of isDefined: in NixOS,
+  # opt.value falls back to the option's declared `default` when no
+  # configuration provided a value, so callers get a meaningful value
+  # for declared-but-undefined options (and the default may itself
+  # throw, which we then capture).
   tryReadValue =
     opt:
-    if !(opt.isDefined or false) then
+    let
+      tried = builtins.tryEval opt.value;
+    in
+    if tried.success then
       {
-        value = null;
+        value = tried.value;
         error = null;
       }
     else
-      let
-        tried = builtins.tryEval opt.value;
-      in
-      if tried.success then
-        {
-          value = tried.value;
-          error = null;
-        }
-      else
-        {
-          value = null;
-          error = "value evaluation failed - likely a merge conflict (mkForce collision, type mismatch, or submodule key collision)";
-        };
+      {
+        value = null;
+        error = "value evaluation failed - likely a merge conflict (mkForce collision, type mismatch, or submodule key collision)";
+      };
 
   # Pair `opt.declarations` (list of file paths) with the matching entry
   # of `opt.declarationPositions` (list of { file, line, column }). Older

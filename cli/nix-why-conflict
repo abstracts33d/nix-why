@@ -108,6 +108,11 @@ else
   attr_expr=""
 fi
 [[ -z "$flake_ref" ]] && flake_ref="."
+case "$flake_ref" in
+  github:* | gitlab:* | sourcehut:* | git+* | http://* | https://* | path:* | flake:*) ;;
+  /*) ;;
+  *) flake_ref="$(realpath -m -- "$flake_ref")" ;;
+esac
 
 if ((no_color)); then
   C_RESET=""
@@ -153,7 +158,7 @@ let
       else if (builtins.length tries) > 1 then
         throw "nix-why-conflict: '\${attr}' is ambiguous - found under \${lib.concatStringsSep ", " tries}. Use the explicit form."
       else
-        lib.attrByPath ([ builtins.head tries ] ++ parts) (throw "unreachable") flake;
+        lib.attrByPath ([ (builtins.head tries) ] ++ parts) (throw "unreachable") flake;
 
   target = resolveAttr;
   adapter_name = "${adapter_name}";

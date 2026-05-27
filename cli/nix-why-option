@@ -247,6 +247,15 @@ else
     flake_ref="."
   fi
 
+  # builtins.getFlake requires an absolute path or a registry/URL form.
+  # Resolve "." and relative paths to an absolute path. Leave registry
+  # URLs (github:, gitlab:, git+, http(s):, path:, flake:) untouched.
+  case "$flake_ref" in
+    github:* | gitlab:* | sourcehut:* | git+* | http://* | https://* | path:* | flake:*) ;;
+    /*) ;;
+    *) flake_ref="$(realpath -m -- "$flake_ref")" ;;
+  esac
+
   nix_expr=$(
     cat << NIXEXPR
 let
@@ -281,7 +290,7 @@ let
       else if (builtins.length tries) > 1 then
         throw "nix-why-option: '\${attr}' is ambiguous - found under \${lib.concatStringsSep ", " tries}. Use the explicit form."
       else
-        lib.attrByPath ([ builtins.head tries ] ++ parts) (throw "unreachable") flake;
+        lib.attrByPath ([ (builtins.head tries) ] ++ parts) (throw "unreachable") flake;
 
   target = resolveAttr;
 
@@ -380,6 +389,13 @@ fi
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+plural_s() {
+  # "s" suffix helper: empty for count==1, "s" otherwise. Bash's
+  # arithmetic ternary `((... ? a : b))` is integer-only, so a string
+  # ternary inside $((...)) silently fails with "expression expected".
+  if [ "$1" -eq 1 ] 2> /dev/null; then printf ''; else printf 's'; fi
+}
+
 priority_label() {
   case "$1" in
     10) echo "mkVMOverride" ;;
@@ -617,7 +633,7 @@ render_what_sets() {
 
   echo
 
-  printf '  %d module%s set this option:\n\n' "$setter_count" "$(((setter_count == 1) ? "" : "s"))"
+  printf '  %d module%s set this option:\n\n' "$setter_count" "$(plural_s "$setter_count")"
 
   while IFS= read -r setter; do
     local file line priorityKind guard_eval pos
@@ -646,7 +662,7 @@ render_what_sets_brief() {
   local path setter_count
   path=$(jq -r '.path' <<< "$ast")
   setter_count=$(jq -r '.setters | length' <<< "$ast")
-  printf '%s: %d setter%s\n' "$path" "$setter_count" "$(((setter_count == 1) ? "" : "s"))"
+  printf '%s: %d setter%s\n' "$path" "$setter_count" "$(plural_s "$setter_count")"
 }
 
 render_search() {
@@ -716,7 +732,7 @@ render_why_not() {
   echo
   if [[ "$isExplicitlySet" == "true" ]]; then
     printf '  %bThis option IS explicitly set%b by %d user definition%s.\n' \
-      "$C_GREEN" "$C_RESET" "$explicit_count" "$(((explicit_count == 1) ? "" : "s"))"
+      "$C_GREEN" "$C_RESET" "$explicit_count" "$(plural_s "$explicit_count")"
     printf '  Run `nix-why-option <target> %s` (without why-not) for the full resolution view.\n' "$path"
     echo
     printf '  Explicit definitions:\n'
@@ -732,7 +748,7 @@ render_why_not() {
     if ((filtered_count > 0)); then
       echo
       printf '  %b%d definition%s would set this option, but their mkIf guards evaluated false:%b\n' \
-        "$C_DIM" "$filtered_count" "$(((filtered_count == 1) ? "" : "s"))" "$C_RESET"
+        "$C_DIM" "$filtered_count" "$(plural_s "$filtered_count")" "$C_RESET"
       while IFS= read -r d; do
         local file line guard_src
         file=$(jq -r '.file // "<unknown>"' <<< "$d")
@@ -761,7 +777,7 @@ render_why_not_brief() {
     printf '%s: explicitly set\n' "$path"
   else
     printf '%s: NOT explicitly set (%d filtered-out def%s)\n' \
-      "$path" "$filtered_count" "$(((filtered_count == 1) ? "" : "s"))"
+      "$path" "$filtered_count" "$(plural_s "$filtered_count")"
   fi
 }
 

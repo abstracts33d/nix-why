@@ -116,6 +116,11 @@ else
   attr_expr=""
 fi
 [[ -z "$flake_ref" ]] && flake_ref="."
+case "$flake_ref" in
+  github:* | gitlab:* | sourcehut:* | git+* | http://* | https://* | path:* | flake:*) ;;
+  /*) ;;
+  *) flake_ref="$(realpath -m -- "$flake_ref")" ;;
+esac
 
 if ((no_color)); then
   C_RESET=""
@@ -477,7 +482,7 @@ if [[ "$mode" == "listing" ]]; then
       continue
     fi
     printf '  %b%d attribute%s contributed%b\n' \
-      "$C_DIM" "$count" "$(((count == 1) ? "" : "s"))" "$C_RESET"
+      "$C_DIM" "$count" "$([ "$count" -eq 1 ] && echo "" || echo "s")" "$C_RESET"
     while IFS= read -r attr; do
       printf '    - %s\n' "$attr"
     done < <(jq -r --argjson lim "$attr_limit" '.attributes[0:$lim][]' <<< "$overlay")

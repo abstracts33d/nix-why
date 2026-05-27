@@ -71,7 +71,7 @@ let
       map (def: finalizeDef (def // { wins = true; })) fromOptionsDefs;
 in
 {
-  # resolve :: { modules, specialArgs ? {}, config, options, path } -> AST
+  # resolve :: { modules, options, path } -> AST
   #
   # Composes the options-surface and module-walk introspection passes.
   # The options-surface pass provides the canonical merge result
@@ -79,11 +79,15 @@ in
   # enriches each definition with line numbers, priority kind, and
   # mkIf-guard records. When module-walk is unavailable, the output
   # degrades gracefully to options-surface fidelity.
+  #
+  # `modules` is optional; pass [] (or omit) when the adapter could not
+  # recover the raw modules list - the merge step then falls back to
+  # options-surface fidelity. A future iteration that applies function
+  # modules during the walk will reintroduce specialArgs and config to
+  # this signature.
   resolve =
     {
       modules ? [ ],
-      specialArgs ? { },
-      config ? { },
       options,
       path,
     }:
@@ -140,7 +144,7 @@ in
       moduleWalkAvailable = moduleWalk.definitions != [ ];
     };
 
-  # whatSets :: { modules, specialArgs ? {}, config, options, path } -> AST
+  # whatSets :: { modules, options, path } -> AST
   #
   # v0.3 reverse-lookup. Returns the same shape as resolve but oriented
   # around "every module that contains a definition for this option,
@@ -156,8 +160,6 @@ in
   whatSets =
     {
       modules ? [ ],
-      specialArgs ? { },
-      config ? { },
       options,
       path,
     }:

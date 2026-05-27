@@ -5,12 +5,18 @@ let
   lib = pkgs.lib;
   nixWhy = import ../lib { inherit lib; };
 
+  # Common module disabling _module.check so intentionally-invalid
+  # fixtures (type-mismatch, mkforce-collision) can be evaluated lazily
+  # without the check pass eagerly walking config and throwing before
+  # the library's tryEval-guarded reads.
+  permissive = { config._module.check = false; };
+
   # Run a single fixture through resolve and apply its assertion.
   runFixture =
     name:
     let
       fixture = import (./fixtures + "/${name}.nix") { inherit lib; };
-      eval = lib.evalModules { modules = fixture.modules; };
+      eval = lib.evalModules { modules = fixture.modules ++ [ permissive ]; };
       ast = nixWhy.resolve {
         modules = fixture.modules;
         config = eval.config;
@@ -55,14 +61,14 @@ let
         { config.foo.enable = true; }
         { config.foo.enable = lib.mkForce false; }
       ];
-      simpleEval = lib.evalModules { modules = simpleModules; };
+      simpleEval = lib.evalModules { modules = simpleModules ++ [ permissive ]; };
 
       searchOptionsModules = [
         { options.services.openssh.enable = lib.mkOption { type = lib.types.bool; default = false; description = "test"; }; }
         { options.services.openssh.port = lib.mkOption { type = lib.types.int; default = 22; description = "test"; }; }
         { options.services.openvpn.enable = lib.mkOption { type = lib.types.bool; default = false; description = "test"; }; }
       ];
-      searchEval = lib.evalModules { modules = searchOptionsModules; };
+      searchEval = lib.evalModules { modules = searchOptionsModules ++ [ permissive ]; };
     in
     [
       {

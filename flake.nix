@@ -67,6 +67,10 @@
         option = {
           type = "app";
           program = "${self.packages.${system}.nix-why-option}/bin/nix-why-option";
+          meta = {
+            description = "Module-system option resolution debugger";
+            mainProgram = "nix-why-option";
+          };
         };
         default = self.apps.${system}.option;
       });

@@ -61,7 +61,8 @@ let
         else
           {
             # The condition's textual source is filled in by the
-            # nix-source extractor (commit 7) when available.
+            # nix-source extractor downstream in why-option.nix when
+            # the source file is readable.
             source = null;
             evaluatedTo = held;
             count = builtins.length conds;

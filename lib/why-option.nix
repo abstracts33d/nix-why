@@ -353,14 +353,17 @@ rec {
       totalMatches = total;
     };
 
-  # render :: { ast, format ? "tree", maxValue ? 200, noColor ? false } -> string
+  # render :: { format ? "tree" } -> string
   #
-  # In-Nix render is a stub; the production CLI ships its own bash
-  # renderers. Provided so library consumers can call render without
-  # depending on the CLI.
+  # Intentional pass-through. The production renderers (tree, brief,
+  # JSON) live in the bash CLIs - rendering is fundamentally an I/O /
+  # color / terminal-width concern that the Nix evaluator cannot
+  # express well. This function exists so library consumers who want
+  # a uniform `lib.{resolve,render}` surface get a graceful pointer
+  # instead of an attribute-not-found error.
   render =
     {
       format ? "tree",
     }:
-    "nix-why: in-Nix render not yet implemented (format=${format}); pass through nix-why-option for the production renderer";
+    "nix-why: in-Nix render is intentionally not implemented (format=${format}); pipe the AST through nix-why-option / nix-why-conflict / nix-why-recursion / nix-why-overlay for the production renderers";
 }

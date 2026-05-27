@@ -3,8 +3,8 @@
   # adapt :: { modules, specialArgs ? {} } -> { modules, specialArgs, config, options }
   #
   # Power-user adapter: accepts an explicit { modules, specialArgs }
-  # record, runs lib.evalModules itself, and returns the result. Used by
-  # the `eval` subcommand. Implemented in commit 12.
+  # record, runs lib.evalModules itself, and returns the result. Used
+  # by the `eval` subcommand of nix-why-option.
   adapt =
     {
       modules,

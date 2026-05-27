@@ -7,7 +7,7 @@
 #
 # Usage:
 #   nix-why-option <flake-target> <option-path> [flags]
-#   nix-why-option eval <expr> <option-path> [flags]   # v0.2 stub
+#   nix-why-option eval <expr> <option-path> [flags]
 #
 # See `nix-why-option --help` for full flag reference.
 

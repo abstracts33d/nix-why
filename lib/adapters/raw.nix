@@ -12,8 +12,8 @@
     }:
     let
       eval = lib.evalModules {
-        modules = modules;
-        specialArgs = specialArgs;
+        inherit modules;
+        inherit specialArgs;
       };
     in
     {

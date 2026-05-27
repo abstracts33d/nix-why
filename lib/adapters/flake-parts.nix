@@ -1,4 +1,4 @@
-{ lib }:
+_:
 let
   # flake-parts wraps lib.evalModules; the user typically points us at
   # either:

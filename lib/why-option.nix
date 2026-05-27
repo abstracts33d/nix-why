@@ -21,8 +21,8 @@ let
     else
       let
         src = internal.extractMkIfCondition {
-          file = def.file;
-          line = def.line;
+          inherit (def) file;
+          inherit (def) line;
           column = def.column or 1;
         };
       in
@@ -65,14 +65,10 @@ let
     in
     if useModuleWalk then
       map (
-        def:
-        finalizeDef (fillGuardSource (def // { wins = computeWins winningPriority def; }))
+        def: finalizeDef (fillGuardSource (def // { wins = computeWins winningPriority def; }))
       ) fromModulesDefs
     else
-      map (
-        def:
-        finalizeDef (def // { wins = true; })
-      ) fromOptionsDefs;
+      map (def: finalizeDef (def // { wins = true; })) fromOptionsDefs;
 in
 {
   # resolve :: { modules, specialArgs ? {}, config, options, path } -> AST
@@ -100,12 +96,7 @@ in
           { definitions = [ ]; }
         else
           internal.fromModules {
-            inherit
-              modules
-              specialArgs
-              config
-              pathParts
-              ;
+            inherit modules pathParts;
           };
 
       mergedDefinitions =
@@ -115,7 +106,7 @@ in
           mergeDefinitions {
             fromOptionsDefs = surface.definitions;
             fromModulesDefs = moduleWalk.definitions;
-            winningPriority = surface.winningPriority;
+            inherit (surface) winningPriority;
           };
 
       # An unresolvable merge surfaces as a non-null surface.valueError
@@ -178,12 +169,7 @@ in
           { definitions = [ ]; }
         else
           internal.fromModules {
-            inherit
-              modules
-              specialArgs
-              config
-              pathParts
-              ;
+            inherit modules pathParts;
           };
 
       # Union of options-surface winners and module-walk all-defs,
@@ -198,11 +184,16 @@ in
               priorityKind
               guardedBy
               ;
-            priority = d.priority;
+            inherit (d) priority;
           }) moduleWalk.definitions
         else
           map (d: {
-            inherit (d) file priority priorityKind guardedBy;
+            inherit (d)
+              file
+              priority
+              priorityKind
+              guardedBy
+              ;
             line = null;
           }) surface.definitions;
     in
@@ -214,7 +205,7 @@ in
         isDefined
         declarations
         ;
-      setters = setters;
+      inherit setters;
       moduleWalkAvailable = moduleWalk.definitions != [ ];
     };
 
@@ -283,10 +274,7 @@ in
   # depending on the CLI.
   render =
     {
-      ast,
       format ? "tree",
-      maxValue ? 200,
-      noColor ? false,
     }:
     "nix-why: in-Nix render not yet implemented (format=${format}); pass through nix-why-option for the production renderer";
 }

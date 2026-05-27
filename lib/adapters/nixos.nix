@@ -1,4 +1,4 @@
-{ lib }:
+_:
 let
   # Try to recover the raw modules list from a NixOS evaluated config.
   # NixOS does not expose this by default; the user (or their flake

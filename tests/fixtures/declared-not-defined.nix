@@ -22,7 +22,5 @@
   # A future "is this *explicitly* set" view (v0.4 territory) would
   # filter on priority != 1500 to distinguish user-supplied
   # definitions from the type default.
-  assertions =
-    ast:
-    ast.kind == "option" && ast.value == false && ast.winningPriority == 1500;
+  assertions = ast: ast.kind == "option" && ast.value == false && ast.winningPriority == 1500;
 }

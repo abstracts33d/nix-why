@@ -21,5 +21,14 @@
 
   # mkMerge fans the three list values out; the merged result is their
   # concatenation in order.
-  assertions = ast: ast.kind == "option" && ast.value == [ "a" "b" "c" ] && (builtins.length ast.definitions) >= 3;
+  assertions =
+    ast:
+    ast.kind == "option"
+    &&
+      ast.value == [
+        "a"
+        "b"
+        "c"
+      ]
+    && (builtins.length ast.definitions) >= 3;
 }

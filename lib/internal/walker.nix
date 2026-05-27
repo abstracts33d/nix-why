@@ -43,7 +43,9 @@ let
       walk {
         value = value.content;
         inherit pathParts pos;
-        ctx = ctx // { priority = value.priority; };
+        ctx = ctx // {
+          inherit (value) priority;
+        };
       }
     else if ty == "merge" then
       lib.concatMap (

@@ -1,4 +1,4 @@
-{ lib }:
+_:
 let
   # Priority numbers come from nixpkgs lib/modules.nix. Lower numbers win
   # the merge. The "default" label corresponds to a value with no

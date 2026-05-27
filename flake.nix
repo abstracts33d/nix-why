@@ -38,10 +38,12 @@
             install -Dm755 cli/nix-why-option $out/bin/nix-why-option
             wrapProgram $out/bin/nix-why-option \
               --set NIX_WHY_LIB $out/share/nix-why/lib \
-              --prefix PATH : ${nixpkgs.lib.makeBinPath [
-                pkgs.jq
-                pkgs.nix
-              ]}
+              --prefix PATH : ${
+                nixpkgs.lib.makeBinPath [
+                  pkgs.jq
+                  pkgs.nix
+                ]
+              }
             runHook postInstall
           '';
           meta = {

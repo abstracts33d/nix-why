@@ -2,14 +2,16 @@
   pkgs ? import <nixpkgs> { },
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   nixWhy = import ../lib { inherit lib; };
 
   # Common module disabling _module.check so intentionally-invalid
   # fixtures (type-mismatch, mkforce-collision) can be evaluated lazily
   # without the check pass eagerly walking config and throwing before
   # the library's tryEval-guarded reads.
-  permissive = { config._module.check = false; };
+  permissive = {
+    config._module.check = false;
+  };
 
   # Run a single fixture through resolve and apply its assertion.
   runFixture =
@@ -18,10 +20,10 @@ let
       fixture = import (./fixtures + "/${name}.nix") { inherit lib; };
       eval = lib.evalModules { modules = fixture.modules ++ [ permissive ]; };
       ast = nixWhy.resolve {
-        modules = fixture.modules;
-        config = eval.config;
-        options = eval.options;
-        path = fixture.path;
+        inherit (fixture) modules;
+        inherit (eval) config;
+        inherit (eval) options;
+        inherit (fixture) path;
       };
       passed = fixture.assertions ast;
     in
@@ -60,7 +62,7 @@ let
       a = r.ast;
     in
     {
-      name = r.name;
+      inherit (r) name;
       kind = a.kind or null;
       value = a.value or null;
       isDefined = a.isDefined or null;
@@ -76,16 +78,40 @@ let
   v03Tests =
     let
       simpleModules = [
-        { options.foo.enable = lib.mkOption { type = lib.types.bool; default = false; description = "test"; }; }
+        {
+          options.foo.enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "test";
+          };
+        }
         { config.foo.enable = true; }
         { config.foo.enable = lib.mkForce false; }
       ];
       simpleEval = lib.evalModules { modules = simpleModules ++ [ permissive ]; };
 
       searchOptionsModules = [
-        { options.services.openssh.enable = lib.mkOption { type = lib.types.bool; default = false; description = "test"; }; }
-        { options.services.openssh.port = lib.mkOption { type = lib.types.int; default = 22; description = "test"; }; }
-        { options.services.openvpn.enable = lib.mkOption { type = lib.types.bool; default = false; description = "test"; }; }
+        {
+          options.services.openssh.enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "test";
+          };
+        }
+        {
+          options.services.openssh.port = lib.mkOption {
+            type = lib.types.int;
+            default = 22;
+            description = "test";
+          };
+        }
+        {
+          options.services.openvpn.enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "test";
+          };
+        }
       ];
       searchEval = lib.evalModules { modules = searchOptionsModules ++ [ permissive ]; };
     in
@@ -96,19 +122,21 @@ let
           let
             ast = nixWhy.whatSets {
               modules = simpleModules;
-              config = simpleEval.config;
-              options = simpleEval.options;
+              inherit (simpleEval) config;
+              inherit (simpleEval) options;
               path = "foo.enable";
             };
           in
-          ast.kind == "option" && (builtins.length ast.setters) >= 1 && (builtins.length ast.declarations) >= 1;
+          ast.kind == "option"
+          && (builtins.length ast.setters) >= 1
+          && (builtins.length ast.declarations) >= 1;
       }
       {
         name = "search-infix-match";
         passed =
           let
             r = nixWhy.search {
-              options = searchEval.options;
+              inherit (searchEval) options;
               pattern = "openssh";
               limit = 50;
             };
@@ -120,7 +148,7 @@ let
         passed =
           let
             r = nixWhy.search {
-              options = searchEval.options;
+              inherit (searchEval) options;
               pattern = "";
               limit = 50;
             };
@@ -132,7 +160,7 @@ let
         passed =
           let
             r = nixWhy.search {
-              options = searchEval.options;
+              inherit (searchEval) options;
               pattern = "services";
               limit = 2;
             };
@@ -144,7 +172,7 @@ let
         passed =
           let
             r = nixWhy.search {
-              options = searchEval.options;
+              inherit (searchEval) options;
               pattern = "nonexistent-substring";
               limit = 50;
             };
@@ -154,8 +182,8 @@ let
     ];
 
   v03Results = map (t: {
-    name = t.name;
-    passed = t.passed;
+    inherit (t) name;
+    inherit (t) passed;
   }) v03Tests;
 
   results = fixtureResults ++ v03Results;

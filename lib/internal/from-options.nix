@@ -17,7 +17,7 @@ let
     in
     if tried.success then
       {
-        value = tried.value;
+        inherit (tried) value;
         error = null;
       }
     else
@@ -117,7 +117,7 @@ in
         inherit path;
         kind = "option";
         type = raw.type.name or null;
-        value = readResult.value;
+        inherit (readResult) value;
         valueError = readResult.error;
         isDefined = raw.isDefined or false;
         winningPriority = raw.highestPrio or null;

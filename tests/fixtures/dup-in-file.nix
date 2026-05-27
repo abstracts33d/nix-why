@@ -20,5 +20,11 @@
   # positions. The walker should distinguish them via unsafeGetAttrPos.
   assertions =
     ast:
-    ast.kind == "option" && ast.value == [ "a" "b" ] && (builtins.length ast.definitions) >= 2;
+    ast.kind == "option"
+    &&
+      ast.value == [
+        "a"
+        "b"
+      ]
+    && (builtins.length ast.definitions) >= 2;
 }

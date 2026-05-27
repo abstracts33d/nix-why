@@ -16,7 +16,7 @@ FLEET_PATH="${FLEET_PATH:-/home/s33d/dev/abstracts33d/fleet}"
 CLI="${REPO_ROOT}/cli/nix-why-option"
 export NIX_WHY_LIB="${REPO_ROOT}/lib"
 
-if [[ ! -d "${FLEET_PATH}" ]]; then
+if [[ ! -d ${FLEET_PATH} ]]; then
   echo "smoke: FLEET_PATH not found: ${FLEET_PATH}" >&2
   exit 1
 fi

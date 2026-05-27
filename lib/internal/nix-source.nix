@@ -86,7 +86,14 @@ let
             || c == "_"
             || c == "-"
             || c == ".";
-          go = idx: if idx >= n then idx else if isIdCh (builtins.substring idx 1 str) then go (idx + 1) else idx;
+          go =
+            idx:
+            if idx >= n then
+              idx
+            else if isIdCh (builtins.substring idx 1 str) then
+              go (idx + 1)
+            else
+              idx;
           end = go 0;
         in
         if end == 0 then null else builtins.substring 0 end str;

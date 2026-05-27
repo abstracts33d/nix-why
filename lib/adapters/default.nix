@@ -21,11 +21,40 @@ let
     let
       has = path: lib.hasAttrByPath path flakeOutput;
     in
-    if has [ "config" "home" "homeDirectory" ] || has [ "activationPackage" ] then
+    if
+      has [
+        "config"
+        "home"
+        "homeDirectory"
+      ]
+      || has [ "activationPackage" ]
+    then
       "home-manager"
-    else if has [ "config" "system" "defaults" ] || has [ "system" "build" "darwin-system" ] then
+    else if
+      has [
+        "config"
+        "system"
+        "defaults"
+      ]
+      || has [
+        "system"
+        "build"
+        "darwin-system"
+      ]
+    then
       "nix-darwin"
-    else if has [ "config" "system" "build" "toplevel" ] || has [ "config" "boot" ] then
+    else if
+      has [
+        "config"
+        "system"
+        "build"
+        "toplevel"
+      ]
+      || has [
+        "config"
+        "boot"
+      ]
+    then
       "nixos"
     else if has [ "config" ] && has [ "options" ] then
       "flake-parts"

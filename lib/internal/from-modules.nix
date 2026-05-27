@@ -66,7 +66,7 @@ let
             evaluatedTo = held;
             count = builtins.length conds;
           };
-      value = leaf.value;
+      inherit (leaf) value;
     };
 in
 {
@@ -82,8 +82,6 @@ in
   fromModules =
     {
       modules,
-      specialArgs ? { },
-      config ? { },
       pathParts,
     }:
     let

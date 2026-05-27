@@ -6,6 +6,38 @@ uses semantic versioning.
 
 ## Unreleased
 
+### v0.4 - "why is this option not explicitly set?"
+
+Added:
+- Library: `nix-why.lib.whyNot { modules ? [], options, path }`. Returns
+  an AST split into `explicitDefinitions` (priority != 1500, mkIf
+  guards held), `defaultDefinitions` (priority == 1500), and
+  `filteredOutDefinitions` (gated by mkIf evaluating false). Surfaces
+  a human-readable `hint` when an option is not explicitly set but
+  has gated would-be-setters.
+- CLI: `nix-why-option why-not <flake-target> <option-path>` subcommand
+  with a dedicated tree renderer that switches on `isExplicitlySet`:
+  green confirmation + explicit definitions when set, yellow "NOT
+  explicitly set" + filtered candidates with their condition source
+  when not.
+- Exit codes for `why-not`: 0 when explicitly set or candidates
+  found; 1 when only the type default contributes and there are no
+  candidates.
+- 3 inline lib tests: whyNot-explicitly-set, whyNot-default-only,
+  whyNot-filtered-by-mkIf.
+
+Design notes:
+- The semantics rest on the observation that NixOS represents an
+  option's declared `default` as a definition at priority 1500
+  (mkOptionDefault). A `priority != 1500` filter is therefore the
+  natural definition of "user-supplied configuration", and the
+  natural way to answer the "why is this option not explicitly set?"
+  question. `resolve` continues to report the unfiltered truth;
+  `whyNot` is a different view onto the same data.
+- An mkIf-gated user definition is **not** an explicit configuration
+  - it is a candidate that did not fire. `explicitDefinitions`
+  requires both priority != 1500 AND the guard to have held.
+
 ### v0.3 - reverse lookup + search
 
 Added:

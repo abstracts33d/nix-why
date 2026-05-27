@@ -10,9 +10,9 @@ where options come from in the first place.
 ## Status
 
 Pre-release. Library and CLI are functionally complete through the
-roadmap's v0.3 milestone (option resolution, conflict explanation,
-reverse lookup, search). Documentation is local-only under `docs/`
-while the design stabilises.
+roadmap's v0.4 milestone (option resolution, conflict explanation,
+reverse lookup, search, "why is this not explicitly set?").
+Documentation is local-only under `docs/` while the design stabilises.
 
 ## Subcommands
 
@@ -21,6 +21,7 @@ while the design stabilises.
 | (default) | resolve a single option to its final value with full provenance |
 | `eval <expr>` | same, against an arbitrary Nix expression (raw evalModules or a flake output) |
 | `what-sets` | list every module that defines an option, regardless of whether it won |
+| `why-not` | explain why an option is *not* explicitly set, surfacing mkIf-filtered candidates |
 | `search <pattern>` | find option paths in the target by infix pattern |
 
 ## Example: resolve
@@ -91,9 +92,10 @@ The Nix introspection library is exposed as a system-agnostic flake
 output:
 
 ```nix
-inputs.nix-why.lib.resolve { modules, specialArgs ? {}, config, options, path }
-inputs.nix-why.lib.whatSets { modules, specialArgs ? {}, config, options, path }
-inputs.nix-why.lib.search { options, pattern, limit ? 50 }
+inputs.nix-why.lib.resolve  { modules ? [], options, path }
+inputs.nix-why.lib.whatSets { modules ? [], options, path }
+inputs.nix-why.lib.whyNot   { modules ? [], options, path }
+inputs.nix-why.lib.search   { options, pattern, limit ? 50 }
 inputs.nix-why.lib.adapters.adapt { name ? null, flakeOutput }
 ```
 

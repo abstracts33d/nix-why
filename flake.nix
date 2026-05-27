@@ -124,23 +124,16 @@
                 chmod -R u+w ./repo
                 cd ./repo
 
-                # Make sure the CLI script is executable - cp from
-                # /nix/store sometimes drops mode bits depending on the
-                # source tree origin.
+                # /usr/bin/env does not exist in the Nix sandbox, so
+                # the script's `#!/usr/bin/env bash` shebang fails with
+                # "bad interpreter". patchShebangs (from stdenv) rewrites
+                # it to the absolute store path of bash. The packaged
+                # binary gets this automatically via wrapProgram; the
+                # raw-source-copy form in this runCommand needs it
+                # applied explicitly.
                 chmod +x cli/nix-why-option
+                patchShebangs cli/nix-why-option
 
-                # Diagnostic: surface the state of the script + lib
-                # before bats runs, so any failure points at the real
-                # cause.
-                echo "=== diagnostics ==="
-                pwd
-                ls -la cli/nix-why-option
-                head -1 cli/nix-why-option
-                ls -la lib/default.nix
-                echo "PATH=$PATH"
-                echo "=== run cli --help directly ==="
-                ./cli/nix-why-option --help || echo "(direct --help exit: $?)"
-                echo "=== bats ==="
                 ${pkgs.bats}/bin/bats tests/cli.bats
                 touch $out
               '';

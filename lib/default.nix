@@ -14,7 +14,6 @@ in
 {
   inherit (whyOption)
     resolve
-    render
     whatSets
     search
     whyNot

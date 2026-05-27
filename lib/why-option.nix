@@ -369,17 +369,4 @@ rec {
       totalMatches = total;
     };
 
-  # render :: { format ? "tree" } -> string
-  #
-  # Intentional pass-through. The production renderers (tree, brief,
-  # JSON) live in the bash CLIs - rendering is fundamentally an I/O /
-  # color / terminal-width concern that the Nix evaluator cannot
-  # express well. This function exists so library consumers who want
-  # a uniform `lib.{resolve,render}` surface get a graceful pointer
-  # instead of an attribute-not-found error.
-  render =
-    {
-      format ? "tree",
-    }:
-    "nix-why: in-Nix render is intentionally not implemented (format=${format}); pipe the AST through nix-why-option / nix-why-conflict / nix-why-recursion / nix-why-overlay for the production renderers";
 }

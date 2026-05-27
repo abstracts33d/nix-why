@@ -102,9 +102,9 @@ The Nix introspection library is exposed as a system-agnostic flake
 output:
 
 ```nix
-inputs.nix-why.lib.resolve  { modules ? [], options, path }
-inputs.nix-why.lib.whatSets { modules ? [], options, path }
-inputs.nix-why.lib.whyNot   { modules ? [], options, path }
+inputs.nix-why.lib.resolve  { modules ? [], config ? {}, options, path }
+inputs.nix-why.lib.whatSets { modules ? [], config ? {}, options, path }
+inputs.nix-why.lib.whyNot   { modules ? [], config ? {}, options, path }
 inputs.nix-why.lib.search   { options, pattern, limit ? 50 }
 inputs.nix-why.lib.adapters.adapt { name ? null, flakeOutput }
 ```

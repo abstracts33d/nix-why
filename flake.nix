@@ -103,10 +103,25 @@
           # CLI-surface bats tests; no Nix evaluation required at test
           # runtime (all tests in cli.bats cover argv / help / error
           # paths that do not invoke `nix eval`).
-          cli-tests = pkgs.runCommand "nix-why-cli-tests" { buildInputs = [ pkgs.bats ]; } ''
-            ${pkgs.bats}/bin/bats ${./tests/cli.bats}
-            touch $out
-          '';
+          #
+          # We copy the whole flake source into the build dir so the
+          # bats test file can resolve REPO_ROOT relative to itself
+          # (it needs cli/nix-why-option and lib/ to be adjacent).
+          cli-tests =
+            pkgs.runCommand "nix-why-cli-tests"
+              {
+                buildInputs = [
+                  pkgs.bats
+                  pkgs.jq
+                ];
+              }
+              ''
+                cp -r ${./.} ./repo
+                chmod -R u+w ./repo
+                cd ./repo
+                ${pkgs.bats}/bin/bats tests/cli.bats
+                touch $out
+              '';
         }
       );
 

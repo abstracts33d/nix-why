@@ -13,9 +13,14 @@ set -euo pipefail
 
 self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${NIX_WHY_LIB:=${self_dir}/../lib}"
+: "${NIX_WHY_CLI_EXPR_DIR:=${self_dir}/expr}"
 
 if [[ ! -f "${NIX_WHY_LIB}/default.nix" ]]; then
   echo "nix-why-conflict: NIX_WHY_LIB does not point at a valid library directory: ${NIX_WHY_LIB}" >&2
+  exit 64
+fi
+if [[ ! -f "${NIX_WHY_CLI_EXPR_DIR}/conflict.nix" ]]; then
+  echo "nix-why-conflict: NIX_WHY_CLI_EXPR_DIR does not point at a valid driver-expression directory: ${NIX_WHY_CLI_EXPR_DIR}" >&2
   exit 64
 fi
 
@@ -130,69 +135,30 @@ else
   C_CYAN=$'\033[36m'
 fi
 
-nix_expr=$(
-  cat << NIXEXPR
-let
-  lib = (import <nixpkgs> { }).lib;
-  nixWhy = import ${NIX_WHY_LIB} { inherit lib; };
-  flake = builtins.getFlake ("${flake_ref}");
-
-  schemas = [ "nixosConfigurations" "darwinConfigurations" "homeConfigurations" ];
-  attr = "${attr_expr}";
-
-  resolveAttr =
-    let
-      parts = lib.splitString "." attr;
-      headPart = builtins.head parts;
-    in
-    if attr == "" then
-      throw "nix-why-conflict: no attribute path given after '#'"
-    else if lib.elem headPart schemas then
-      lib.attrByPath parts (throw "nix-why-conflict: attribute path '\${attr}' not found in flake") flake
-    else
-      let
-        tries = lib.filter (s: lib.hasAttrByPath ([ s ] ++ parts) flake) schemas;
-      in
-      if tries == [ ] then
-        throw "nix-why-conflict: '\${attr}' did not match any of \${lib.concatStringsSep ", " schemas} in the flake. Use the explicit form."
-      else if (builtins.length tries) > 1 then
-        throw "nix-why-conflict: '\${attr}' is ambiguous - found under \${lib.concatStringsSep ", " tries}. Use the explicit form."
-      else
-        lib.attrByPath ([ (builtins.head tries) ] ++ parts) (throw "unreachable") flake;
-
-  target = resolveAttr;
-  adapter_name = "${adapter_name}";
-  adapted = nixWhy.adapters.adapt {
-    name = if adapter_name == "" then null else adapter_name;
-    flakeOutput = target;
-  };
-  ast = nixWhy.resolve {
-    inherit (adapted) modules options;
-    path = "${option_path}";
-  };
-in
-{
-  inherit (ast) path kind type valueError conflicts;
-}
-NIXEXPR
+nix_eval_args=(
+  --eval --strict --json --impure
+  --argstr libPath "${NIX_WHY_LIB}"
+  --argstr flakeRef "${flake_ref}"
+  --argstr attr "${attr_expr}"
+  --argstr optionPath "${option_path}"
+  --argstr adapterName "${adapter_name}"
+  "${NIX_WHY_CLI_EXPR_DIR}/conflict.nix"
 )
-
-nix_eval_args=(--impure --json --expr "${nix_expr}")
 ((show_trace)) && nix_eval_args+=(--show-trace)
 
 stderr_file="$(mktemp)"
 trap 'rm -f "${stderr_file}"' EXIT
 ast_json=""
 nix_rc=0
-ast_json="$(nix eval "${nix_eval_args[@]}" 2> "${stderr_file}")" || nix_rc=$?
+ast_json="$(nix-instantiate "${nix_eval_args[@]}" 2> "${stderr_file}")" || nix_rc=$?
 nix_stderr="$(cat "${stderr_file}")"
 
 if ((nix_rc != 0)); then
   case "$nix_stderr" in
-    *"nix-why-conflict: '"*"' did not match any of "* | \
-      *"nix-why-conflict: '"*"' is ambiguous"* | \
-      *"nix-why-conflict: attribute path '"*"' not found"* | \
-      *"nix-why-conflict: no attribute path given after"* | \
+    *"nix-why: '"*"' did not match any of "* | \
+      *"nix-why: '"*"' is ambiguous"* | \
+      *"nix-why: attribute path '"*"' not found"* | \
+      *"nix-why: no attribute path given after"* | \
       *"nix-why: could not detect adapter"* | \
       *"nix-why: unknown adapter"*)
       echo "$nix_stderr" >&2

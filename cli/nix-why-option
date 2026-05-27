@@ -14,16 +14,22 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Configuration: where to find the nix-why library
+# Configuration: where to find the nix-why library + driver expressions
 # ---------------------------------------------------------------------------
-# The packaged binary sets NIX_WHY_LIB at wrap time. For local
-# development from a clone, the user can either set NIX_WHY_LIB
-# explicitly or rely on the relative-to-script fallback.
+# The packaged binary sets NIX_WHY_LIB and NIX_WHY_CLI_EXPR_DIR at wrap
+# time. For local development from a clone, fallback to script-relative
+# paths.
 self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${NIX_WHY_LIB:=${self_dir}/../lib}"
+: "${NIX_WHY_CLI_EXPR_DIR:=${self_dir}/expr}"
 
 if [[ ! -f "${NIX_WHY_LIB}/default.nix" ]]; then
   echo "nix-why-option: NIX_WHY_LIB does not point at a valid library directory: ${NIX_WHY_LIB}" >&2
+  exit 64
+fi
+
+if [[ ! -f "${NIX_WHY_CLI_EXPR_DIR}/resolve.nix" ]]; then
+  echo "nix-why-option: NIX_WHY_CLI_EXPR_DIR does not point at a valid driver-expression directory: ${NIX_WHY_CLI_EXPR_DIR}" >&2
   exit 64
 fi
 
@@ -181,63 +187,42 @@ case "$subcommand" in
 esac
 
 # ---------------------------------------------------------------------------
-# Build the Nix expression
+# Build the nix eval invocation
 # ---------------------------------------------------------------------------
-# Two flavours, one shared post-processing:
-#   - default subcommand: positional[0] is a flake target (.#krach ...);
-#     the expression imports the flake, resolves the attr (with optional
-#     schema shorthand), and dispatches via the adapter table.
-#   - eval subcommand: positional[0] is an arbitrary Nix expression;
-#     the expression evaluates it and dispatches based on shape (raw
-#     adapter when the result has a `modules` field, otherwise the
-#     normal autodetect via .config + .options).
+# Each subcommand maps to a driver expression file in
+# $NIX_WHY_CLI_EXPR_DIR:
+#   - default / what-sets / why-not / search  -> resolve.nix
+#   - eval                                    -> eval.nix
+# All arguments are passed via --argstr (no shell-into-Nix interpolation),
+# which eliminates an entire class of heredoc escape bugs.
 
 if [[ "$subcommand" == "eval" ]]; then
   user_expr="${positional[0]}"
 
-  nix_expr=$(
-    cat << NIXEXPR
-let
-  lib = (import <nixpkgs> { }).lib;
-  nixWhy = import ${NIX_WHY_LIB} { inherit lib; };
+  # Write the user's Nix expression to a temp file and pass the path
+  # to eval.nix - which imports it. This avoids interpolating
+  # arbitrary user-supplied Nix into a shell heredoc.
+  user_expr_file="$(mktemp --suffix=.nix)"
+  trap 'rm -f "${user_expr_file}"' EXIT
+  printf '%s\n' "$user_expr" > "${user_expr_file}"
 
-  userResult = (${user_expr});
-
-  adapter_name = "${adapter_name}";
-
-  isRawInput = builtins.isAttrs userResult && (userResult ? modules);
-
-  adapted =
-    if adapter_name == "raw" || isRawInput then
-      nixWhy.adapters.byName.raw userResult
-    else
-      nixWhy.adapters.adapt {
-        name = if adapter_name == "" then null else adapter_name;
-        flakeOutput = userResult;
-      };
-
-  ast =
-    if "${library_fn}" == "search" then
-      nixWhy.search {
-        options = adapted.options;
-        pattern = "${search_pattern}";
-        limit = ${search_limit};
-      }
-    else
-      nixWhy.${library_fn} {
-        inherit (adapted) modules options config;
-        path = "${option_path}";
-      };
-in
-ast
-NIXEXPR
+  nix_eval_args=(
+    --eval --strict --json --impure
+    --argstr libPath "${NIX_WHY_LIB}"
+    --argstr userExprFile "${user_expr_file}"
+    --argstr optionPath "${option_path}"
+    --argstr searchPattern "${search_pattern}"
+    --argstr searchLimit "${search_limit}"
+    --argstr adapterName "${adapter_name}"
+    --argstr mode "${library_fn}"
+    "${NIX_WHY_CLI_EXPR_DIR}/eval.nix"
   )
 
 else
   flake_target="${positional[0]}"
 
-  # Split <flake-ref>#<attr-path>. If no '#', treat the whole thing as a
-  # flake ref pointing at a flake whose default attribute is the target.
+  # Split <flake-ref>#<attr-path>. If no '#', treat the whole thing
+  # as a flake ref.
   if [[ "$flake_target" == *"#"* ]]; then
     flake_ref="${flake_target%%#*}"
     attr_expr="${flake_target#*#}"
@@ -246,87 +231,28 @@ else
     attr_expr=""
   fi
 
-  # Default flake ref shorthand: '.' means current directory.
-  if [[ -z "$flake_ref" ]]; then
-    flake_ref="."
-  fi
+  [[ -z "$flake_ref" ]] && flake_ref="."
 
-  # builtins.getFlake requires an absolute path or a registry/URL form.
-  # Resolve "." and relative paths to an absolute path. Leave registry
-  # URLs (github:, gitlab:, git+, http(s):, path:, flake:) untouched.
+  # builtins.getFlake requires an absolute path or registry URL.
   case "$flake_ref" in
     github:* | gitlab:* | sourcehut:* | git+* | http://* | https://* | path:* | flake:*) ;;
     /*) ;;
     *) flake_ref="$(realpath -m -- "$flake_ref")" ;;
   esac
 
-  nix_expr=$(
-    cat << NIXEXPR
-let
-  lib = (import <nixpkgs> { }).lib;
-  nixWhy = import ${NIX_WHY_LIB} { inherit lib; };
-  flake = builtins.getFlake ("${flake_ref}");
-
-  schemas = [
-    "nixosConfigurations"
-    "darwinConfigurations"
-    "homeConfigurations"
-  ];
-
-  attr = "${attr_expr}";
-
-  resolveAttr =
-    let
-      parts = lib.splitString "." attr;
-      headPart = builtins.head parts;
-      tailParts = builtins.tail parts;
-    in
-    if attr == "" then
-      throw "nix-why-option: no attribute path given after '#'"
-    else if lib.elem headPart schemas then
-      lib.attrByPath parts (throw "nix-why-option: attribute path '\${attr}' not found in flake") flake
-    else
-      let
-        tries = lib.filter (s: lib.hasAttrByPath ([ s ] ++ parts) flake) schemas;
-      in
-      if tries == [ ] then
-        throw "nix-why-option: '\${attr}' did not match any of \${lib.concatStringsSep ", " schemas} in the flake. Use the explicit form (e.g. .#nixosConfigurations.\${attr})"
-      else if (builtins.length tries) > 1 then
-        throw "nix-why-option: '\${attr}' is ambiguous - found under \${lib.concatStringsSep ", " tries}. Use the explicit form."
-      else
-        lib.attrByPath ([ (builtins.head tries) ] ++ parts) (throw "unreachable") flake;
-
-  target = resolveAttr;
-
-  adapter_name = "${adapter_name}";
-
-  adapted = nixWhy.adapters.adapt {
-    name = if adapter_name == "" then null else adapter_name;
-    flakeOutput = target;
-  };
-
-  ast =
-    if "${library_fn}" == "search" then
-      nixWhy.search {
-        options = adapted.options;
-        pattern = "${search_pattern}";
-        limit = ${search_limit};
-      }
-    else
-      nixWhy.${library_fn} {
-        inherit (adapted) modules options config;
-        path = "${option_path}";
-      };
-in
-ast
-NIXEXPR
+  nix_eval_args=(
+    --eval --strict --json --impure
+    --argstr libPath "${NIX_WHY_LIB}"
+    --argstr flakeRef "${flake_ref}"
+    --argstr attr "${attr_expr}"
+    --argstr optionPath "${option_path}"
+    --argstr searchPattern "${search_pattern}"
+    --argstr searchLimit "${search_limit}"
+    --argstr adapterName "${adapter_name}"
+    --argstr mode "${library_fn}"
+    "${NIX_WHY_CLI_EXPR_DIR}/resolve.nix"
   )
 fi
-
-# ---------------------------------------------------------------------------
-# Invoke nix eval
-# ---------------------------------------------------------------------------
-nix_eval_args=(--impure --json --expr "${nix_expr}")
 if ((show_trace)); then
   nix_eval_args+=(--show-trace)
 fi
@@ -338,7 +264,7 @@ ast_json=""
 nix_stderr=""
 nix_rc=0
 {
-  ast_json="$(nix eval "${nix_eval_args[@]}" 2> /tmp/nix-why-option.stderr.$$)" || nix_rc=$?
+  ast_json="$(nix-instantiate "${nix_eval_args[@]}" 2> /tmp/nix-why-option.stderr.$$)" || nix_rc=$?
   nix_stderr="$(cat /tmp/nix-why-option.stderr.$$)"
   rm -f /tmp/nix-why-option.stderr.$$
 }
@@ -347,10 +273,10 @@ if ((nix_rc != 0)); then
   # Map well-known internal throws to specific exit codes. Anything else
   # is treated as a generic evaluation error (exit 4).
   case "$nix_stderr" in
-    *"nix-why-option: '"*"' did not match any of "* | \
-      *"nix-why-option: '"*"' is ambiguous"* | \
-      *"nix-why-option: attribute path '"*"' not found"* | \
-      *"nix-why-option: no attribute path given after"* | \
+    *"nix-why: '"*"' did not match any of "* | \
+      *"nix-why: '"*"' is ambiguous"* | \
+      *"nix-why: attribute path '"*"' not found"* | \
+      *"nix-why: no attribute path given after"* | \
       *"nix-why: could not detect adapter"* | \
       *"nix-why: unknown adapter"*)
       echo "$nix_stderr" >&2

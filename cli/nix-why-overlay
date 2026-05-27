@@ -15,6 +15,17 @@
 
 set -euo pipefail
 
+# nix-why-overlay does not use the nix-why library (overlay attribution
+# uses a different evaluation model), but its driver expression lives
+# in $NIX_WHY_CLI_EXPR_DIR/overlay.nix.
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+: "${NIX_WHY_CLI_EXPR_DIR:=${self_dir}/expr}"
+
+if [[ ! -f "${NIX_WHY_CLI_EXPR_DIR}/overlay.nix" ]]; then
+  echo "nix-why-overlay: NIX_WHY_CLI_EXPR_DIR does not point at a valid driver-expression directory: ${NIX_WHY_CLI_EXPR_DIR}" >&2
+  exit 64
+fi
+
 print_usage() {
   cat << 'EOF'
 nix-why-overlay - explain how an attribute came to be on pkgs
@@ -141,293 +152,23 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Build the Nix expression
+# Build the nix eval invocation
 # ---------------------------------------------------------------------------
-# The expression branches on whether attr_path is given:
-#   - empty:        listing mode (each overlay's contributed attrs)
-#   - non-empty:    attribution mode (cumulative fold + signature diff)
-#
-# Both modes share the discovery logic: locate overlays + applied pkgs +
-# the original nixpkgs source for a clean baseline.
-nix_expr=$(
-  cat << NIXEXPR
-let
-  lib = (import <nixpkgs> { }).lib;
-  flake = builtins.getFlake ("${flake_ref}");
-
-  flakeAttr = "${attr_expr}";
-  parts = if flakeAttr == "" then [ ] else lib.splitString "." flakeAttr;
-  target =
-    if parts == [ ] then
-      throw "nix-why-overlay: no attribute path given after '#'"
-    else
-      lib.attrByPath parts (throw "nix-why-overlay: attribute path '\${flakeAttr}' not found in flake") flake;
-
-  attrPath = "${attr_path}";
-  pathParts = if attrPath == "" then [ ] else lib.splitString "." attrPath;
-
-  discovery =
-    let
-      tries = [
-        (
-          if (target ? config && target.config ? nixpkgs && target.config.nixpkgs ? overlays && target.config ? _module && target.config._module ? args && target.config._module.args ? pkgs)
-          then { pkgs = target.config._module.args.pkgs; overlays = target.config.nixpkgs.overlays; nixpkgsConfig = target.config.nixpkgs.config or { }; }
-          else null
-        )
-        (
-          if (target ? _module && target._module ? args && target._module.args ? pkgs && target._module.args.pkgs ? overlays)
-          then { inherit (target._module.args) pkgs; overlays = target._module.args.pkgs.overlays; nixpkgsConfig = target._module.args.pkgs.config or { }; }
-          else null
-        )
-        (
-          if (target ? overlays && target ? pkgs && builtins.isList target.overlays)
-          then { inherit (target) pkgs overlays; nixpkgsConfig = target.pkgs.config or { }; }
-          else null
-        )
-        (
-          if (target ? lib && target ? stdenv && target ? overlays && builtins.isList target.overlays)
-          then { pkgs = target; inherit (target) overlays; nixpkgsConfig = target.config or { }; }
-          else null
-        )
-      ];
-      hit = lib.findFirst (x: x != null) null tries;
-    in
-    hit;
-in
-if discovery == null then
-  {
-    error = "could not locate overlays on the target. Tried NixOS/HM/darwin config.nixpkgs, _module.args.pkgs, target.overlays, and target-is-pkgs shapes. Point me at .#nixosConfigurations.<host> or .#legacyPackages.<system>.";
-  }
-else
-  let
-    pkgs = discovery.pkgs;
-    overlays = discovery.overlays;
-
-    # Try to recover the underlying nixpkgs source. \`pkgs.path\` is the
-    # standard way; falls back to null when the pkgs instance was built
-    # in a way that did not retain it.
-    nixpkgsSrc = pkgs.path or null;
-    canBuildBaseline = nixpkgsSrc != null;
-
-    system = pkgs.stdenv.hostPlatform.system or builtins.currentSystem;
-
-    # Baseline pkgs: the same nixpkgs source the target uses, but with
-    # no user overlays applied. Used only in attribution mode.
-    baselinePkgs =
-      if canBuildBaseline
-      then import nixpkgsSrc { inherit system; config = discovery.nixpkgsConfig; overlays = [ ]; }
-      else null;
-
-    # Cumulative fold: [ baseline, after-o0, after-o1, ... ]
-    cumulatives =
-      if canBuildBaseline
-      then lib.foldl (acc: ov: acc ++ [ ((lib.last acc).extend ov) ]) [ baselinePkgs ] overlays
-      else [ ];
-
-    # tryRead :: any -> tryEval result   (helper)
-    tryRead = expr: builtins.tryEval expr;
-
-    # Compute a comparable signature for the attribute at one pkgs step.
-    # For derivations we also capture a handful of comparable fields so
-    # the diff can surface which fields changed when an overlay
-    # modifies an existing derivation.
-    sigOf =
-      pkgsInst:
-      let
-        tried = tryRead (lib.attrByPath pathParts null pkgsInst);
-      in
-      if !tried.success then
-        { kind = "eval-error"; }
-      else if tried.value == null then
-        { kind = "missing"; }
-      else
-        let
-          v = tried.value;
-          drvTried = tryRead (v.drvPath or null);
-          namesTried = tryRead (if builtins.isAttrs v then builtins.attrNames v else [ ]);
-          strTried = tryRead (
-            if builtins.isFunction v then "<function>"
-            else builtins.toString v
-          );
-          # For derivations: capture comparable fields so per-field diff
-          # works downstream. Each field is wrapped in tryEval - an
-          # overlay can produce a derivation without "version" etc.
-          drvField = name: let t = tryRead (v.\${name} or null); in if t.success then t.value else null;
-        in
-        if builtins.isAttrs v && drvTried.success && drvTried.value != null then
-          {
-            kind = "derivation";
-            drvPath = drvTried.value;
-            fields = {
-              name = drvField "name";
-              version = drvField "version";
-              pname = drvField "pname";
-              outputName = drvField "outputName";
-              system = drvField "system";
-            };
-          }
-        else if builtins.isAttrs v then
-          { kind = "attrset"; attrNames = if namesTried.success then namesTried.value else [ ]; }
-        else if builtins.isFunction v then
-          { kind = "function"; }
-        else if builtins.isList v then
-          { kind = "list"; length = builtins.length v; }
-        else
-          { kind = builtins.typeOf v; value = if strTried.success then strTried.value else "(unprintable)"; };
-
-    signatures = map sigOf cumulatives;
-
-    # When two derivation signatures differ, identify which captured
-    # fields changed (name/version/pname/outputName/system). Falls back
-    # to ["drvPath"] when fields are equal but drvPath differs (some
-    # internal attr or src changed).
-    changedFields =
-      prev: curr:
-      if prev.kind != "derivation" || curr.kind != "derivation" then
-        [ ]
-      else
-        let
-          fieldNames = [ "name" "version" "pname" "outputName" "system" ];
-          diff = builtins.filter (fn: (prev.fields.\${fn} or null) != (curr.fields.\${fn} or null)) fieldNames;
-        in
-        if diff != [ ] then diff
-        else if prev.drvPath != curr.drvPath then [ "drvPath" ]
-        else [ ];
-
-    # One diff per overlay: comparing signatures[i] to signatures[i+1].
-    diffOf =
-      i:
-      let
-        prev = builtins.elemAt signatures i;
-        curr = builtins.elemAt signatures (i + 1);
-        same = prev == curr;
-        prevMissing = prev.kind == "missing";
-        currMissing = curr.kind == "missing";
-        kind =
-          if same then "unchanged"
-          else if prevMissing && !currMissing then "introduced"
-          else if !prevMissing && currMissing then "removed"
-          else "modified";
-      in
-      {
-        overlayIndex = i;
-        kind = kind;
-        prevKind = prev.kind;
-        currKind = curr.kind;
-        # changedFields is populated only for "modified" derivations.
-        changedFields = if kind == "modified" then changedFields prev curr else [ ];
-      };
-
-    diffs =
-      if pathParts == [ ] then [ ]
-      else lib.genList diffOf (builtins.length overlays);
-
-    changeDiffs = lib.filter (d: d.kind != "unchanged") diffs;
-
-    summary =
-      if pathParts == [ ] then null
-      else
-        let
-          firstAppearance =
-            let
-              baseline = builtins.head signatures;
-              firstChange = lib.findFirst (d: d.kind == "introduced") null diffs;
-            in
-            if baseline.kind != "missing" then "baseline"
-            else if firstChange != null then builtins.elemAt overlayNames firstChange.overlayIndex
-            else "never";
-          lastModification =
-            let
-              last = lib.findFirst (d: true) null (lib.reverseList changeDiffs);
-            in
-            if last == null then "none"
-            else "\${builtins.elemAt overlayNames last.overlayIndex} (\${last.kind})";
-        in
-        {
-          inherit firstAppearance lastModification;
-          changeCount = builtins.length changeDiffs;
-          finalKind = (lib.last signatures).kind;
-        };
-
-    # Synthetic per-overlay name. Pure-Nix has no access to the source
-    # binding that produced each overlay function value, so we derive
-    # a human-readable name from the FIRST FEW top-level attributes the
-    # overlay contributes when applied. Falls back to "overlay <idx>"
-    # when the overlay fails to evaluate or contributes nothing.
-    synthName =
-      idx: overlay:
-      let
-        applied = tryRead (overlay pkgs pkgs);
-        names =
-          if applied.success && builtins.isAttrs applied.value
-          then builtins.attrNames applied.value
-          else [ ];
-        sample = lib.take 2 names;
-        suffix = if builtins.length names > 2 then ", ..." else "";
-      in
-      if names == [ ] then
-        "overlay \${toString idx}"
-      else
-        "overlay \${toString idx} (\${lib.concatStringsSep ", " sample}\${suffix})";
-
-    overlayNames = lib.imap0 synthName overlays;
-
-    # Listing mode (no attrPath given): keep the v0.4 MVP behaviour but
-    # include the synthetic name per overlay.
-    listingOverlays =
-      let
-        describe =
-          idx: overlay:
-          let
-            applied = tryRead (overlay pkgs pkgs);
-            names =
-              if applied.success && builtins.isAttrs applied.value
-              then builtins.attrNames applied.value
-              else [ ];
-          in
-          {
-            index = idx;
-            name = builtins.elemAt overlayNames idx;
-            appliedOk = applied.success;
-            attributeCount = builtins.length names;
-            attributes = names;
-          };
-      in
-      lib.imap0 describe overlays;
-  in
-  if pathParts == [ ] then
-    {
-      mode = "listing";
-      error = null;
-      overlayCount = builtins.length overlays;
-      overlays = listingOverlays;
-    }
-  else if !canBuildBaseline then
-    {
-      mode = "attribution";
-      error = "could not locate baseline nixpkgs source (pkgs.path is unset on this target). Attribution requires a baseline to fold overlays against.";
-    }
-  else
-    {
-      mode = "attribution";
-      error = null;
-      path = attrPath;
-      overlayCount = builtins.length overlays;
-      overlayNames = overlayNames;
-      signatures = signatures;
-      diffs = diffs;
-      inherit summary;
-    }
-NIXEXPR
+# Driver expression at $NIX_WHY_CLI_EXPR_DIR/overlay.nix handles both
+# listing mode (attrPath empty) and attribution mode (attrPath given).
+nix_eval_args=(
+  --eval --strict --json --impure
+  --argstr flakeRef "${flake_ref}"
+  --argstr attr "${attr_expr}"
+  --argstr attrPath "${attr_path}"
+  "${NIX_WHY_CLI_EXPR_DIR}/overlay.nix"
 )
-
-nix_eval_args=(--impure --json --expr "${nix_expr}")
 ((show_trace)) && nix_eval_args+=(--show-trace)
 
 stderr_file="$(mktemp)"
 trap 'rm -f "${stderr_file}"' EXIT
 nix_rc=0
-ast_json="$(nix eval "${nix_eval_args[@]}" 2> "${stderr_file}")" || nix_rc=$?
+ast_json="$(nix-instantiate "${nix_eval_args[@]}" 2> "${stderr_file}")" || nix_rc=$?
 nix_stderr="$(cat "${stderr_file}")"
 
 if ((nix_rc != 0)); then

@@ -23,19 +23,25 @@
       treefmtEval = eachSystem (system: treefmt-nix.lib.evalModule (pkgsFor system) ./treefmt.nix);
 
       # Helper: package one of the cli scripts. All siblings share the
-      # same shape - wrap with NIX_WHY_LIB set to the shared lib copy
-      # and jq + nix in PATH.
+      # same shape:
+      #   - wrap with NIX_WHY_LIB set to the shared lib copy (when
+      #     needsLib)
+      #   - wrap with NIX_WHY_CLI_EXPR_DIR set to the cli/expr/ copy
+      #     (when needsExpr) - the CLI calls `nix eval -f` on these
+      #     instead of building heredoc-Nix at runtime
+      #   - jq + nix in PATH
       mkCliScript =
         {
           name,
           desc,
           needsLib ? true,
+          needsExpr ? true,
           extraDeps ? [ ],
         }:
         pkgs:
         pkgs.stdenv.mkDerivation {
           pname = name;
-          version = "0.4.0-pre";
+          version = "0.5.0-pre";
           src = ./.;
           nativeBuildInputs = [ pkgs.makeWrapper ];
           dontConfigure = true;
@@ -44,9 +50,11 @@
             runHook preInstall
             mkdir -p $out/bin $out/share/nix-why
             ${nixpkgs.lib.optionalString needsLib "cp -r lib $out/share/nix-why/lib"}
+            ${nixpkgs.lib.optionalString needsExpr "cp -r cli/expr $out/share/nix-why/cli-expr"}
             install -Dm755 cli/${name} $out/bin/${name}
             wrapProgram $out/bin/${name} \
               ${nixpkgs.lib.optionalString needsLib "--set NIX_WHY_LIB $out/share/nix-why/lib"} \
+              ${nixpkgs.lib.optionalString needsExpr "--set NIX_WHY_CLI_EXPR_DIR $out/share/nix-why/cli-expr"} \
               --prefix PATH : ${
                 nixpkgs.lib.makeBinPath (
                   [
@@ -77,8 +85,10 @@
       mkNixWhyRecursion = mkCliScript {
         name = "nix-why-recursion";
         desc = "Surface infinite-recursion cycles in --show-trace output";
-        # The recursion tool is a pure text parser; no library needed.
+        # The recursion tool is a pure text parser; no library or Nix
+        # expressions needed.
         needsLib = false;
+        needsExpr = false;
       };
       mkNixWhyOverlay = mkCliScript {
         name = "nix-why-overlay";
@@ -196,6 +206,15 @@
                          cli/nix-why-recursion cli/nix-why-overlay
                 patchShebangs cli/nix-why-option cli/nix-why-conflict \
                               cli/nix-why-recursion cli/nix-why-overlay
+
+                # The CLIs read NIX_WHY_LIB and NIX_WHY_CLI_EXPR_DIR
+                # to locate the Nix library and the .nix driver
+                # expressions. Bats tests cover argv / help / error
+                # paths that do not actually run `nix eval`, so the
+                # values do not need to point at valid trees - just
+                # set them so the startup validation does not trip.
+                export NIX_WHY_LIB="$PWD/lib"
+                export NIX_WHY_CLI_EXPR_DIR="$PWD/cli/expr"
 
                 ${pkgs.bats}/bin/bats tests/cli.bats tests/siblings.bats
                 touch $out

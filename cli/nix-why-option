@@ -38,6 +38,7 @@ Usage:
   nix-why-option <flake-target> <option-path> [flags]
   nix-why-option eval <expr> <option-path> [flags]
   nix-why-option what-sets <flake-target> <option-path> [flags]
+  nix-why-option why-not <flake-target> <option-path> [flags]
   nix-why-option search <flake-target> <pattern> [flags]
 
 Examples:
@@ -135,7 +136,7 @@ done
 subcommand=""
 if (("${#positional[@]}" >= 1)); then
   case "${positional[0]}" in
-    eval | what-sets | search)
+    eval | what-sets | search | why-not)
       subcommand="${positional[0]}"
       positional=("${positional[@]:1}")
       ;;
@@ -149,6 +150,9 @@ if (("${#positional[@]}" != 2)); then
       ;;
     what-sets)
       echo "nix-why-option what-sets: expected <flake-target> <option-path> (got ${#positional[@]} positional args)" >&2
+      ;;
+    why-not)
+      echo "nix-why-option why-not: expected <flake-target> <option-path> (got ${#positional[@]} positional args)" >&2
       ;;
     search)
       echo "nix-why-option search: expected <flake-target> <pattern> (got ${#positional[@]} positional args)" >&2
@@ -167,6 +171,7 @@ search_pattern="${positional[1]}"
 
 case "$subcommand" in
   what-sets) library_fn="whatSets" ;;
+  why-not) library_fn="whyNot" ;;
   search) library_fn="search" ;;
   *) library_fn="resolve" ;;
 esac
@@ -348,8 +353,9 @@ fi
 # ---------------------------------------------------------------------------
 # Inspect AST `kind` field for the early-exit cases
 # ---------------------------------------------------------------------------
-# search returns a different shape (no kind field); the kind-based
-# early-exits below only apply to resolve / whatSets.
+# resolve, whatSets, and whyNot all expose a `kind` field for the
+# not-found / not-an-option early exits. search returns a different
+# shape with no kind.
 if [[ "$subcommand" != "search" ]]; then
   kind="$(printf '%s' "$ast_json" | jq -r '.kind')"
   case "$kind" in
@@ -669,6 +675,96 @@ render_search_brief() {
   jq -r '.matches[].path' <<< "$ast"
 }
 
+render_def_line() {
+  local def="$1"
+  local file line priorityKind value pos
+  file=$(jq -r '.file // "<unknown>"' <<< "$def")
+  line=$(jq -r '.line // empty' <<< "$def")
+  priorityKind=$(jq -r '.priorityKind // "unknown"' <<< "$def")
+  value=$(jq -c '.value' <<< "$def")
+  pos="$file"
+  [[ -n "$line" ]] && pos="${file}:${line}"
+  printf '    - %s [%s] → %s\n' "$pos" "$priorityKind" "$(render_value "$value" "$max_value")"
+}
+
+render_why_not() {
+  local ast="$1"
+  local path type value isExplicitlySet explicit_count default_count filtered_count hint
+  path=$(jq -r '.path' <<< "$ast")
+  type=$(jq -r '.type // "unknown"' <<< "$ast")
+  value=$(jq -c '.value' <<< "$ast")
+  isExplicitlySet=$(jq -r '.isExplicitlySet' <<< "$ast")
+  explicit_count=$(jq -r '.explicitDefinitions | length' <<< "$ast")
+  default_count=$(jq -r '.defaultDefinitions | length' <<< "$ast")
+  filtered_count=$(jq -r '.filteredOutDefinitions | length' <<< "$ast")
+  hint=$(jq -r '.hint // empty' <<< "$ast")
+
+  printf '%b%s%b : %b%s%b\n' "$C_BOLD" "$path" "$C_RESET" "$C_CYAN" "$type" "$C_RESET"
+  printf '  value     %s\n' "$(render_value "$value" "$max_value")"
+
+  while IFS= read -r decl; do
+    local f l
+    f=$(jq -r '.file' <<< "$decl")
+    l=$(jq -r '.line // empty' <<< "$decl")
+    if [[ -n "$l" ]]; then
+      printf '  declared  %s:%s\n' "$f" "$l"
+    else
+      printf '  declared  %s\n' "$f"
+    fi
+  done < <(jq -c '.declarations[]' <<< "$ast")
+
+  echo
+  if [[ "$isExplicitlySet" == "true" ]]; then
+    printf '  %bThis option IS explicitly set%b by %d user definition%s.\n' \
+      "$C_GREEN" "$C_RESET" "$explicit_count" "$(((explicit_count == 1) ? "" : "s"))"
+    printf '  Run `nix-why-option <target> %s` (without why-not) for the full resolution view.\n' "$path"
+    echo
+    printf '  Explicit definitions:\n'
+    while IFS= read -r d; do render_def_line "$d"; done < <(jq -c '.explicitDefinitions[]' <<< "$ast")
+  else
+    printf '  %bThis option is NOT explicitly set%b - only the type default contributes.\n' \
+      "$C_YELLOW" "$C_RESET"
+    if ((default_count > 0)); then
+      echo
+      printf '  Type default (priority 1500):\n'
+      while IFS= read -r d; do render_def_line "$d"; done < <(jq -c '.defaultDefinitions[]' <<< "$ast")
+    fi
+    if ((filtered_count > 0)); then
+      echo
+      printf '  %b%d definition%s would set this option, but their mkIf guards evaluated false:%b\n' \
+        "$C_DIM" "$filtered_count" "$(((filtered_count == 1) ? "" : "s"))" "$C_RESET"
+      while IFS= read -r d; do
+        local file line guard_src
+        file=$(jq -r '.file // "<unknown>"' <<< "$d")
+        line=$(jq -r '.line // empty' <<< "$d")
+        guard_src=$(jq -r '.guardedBy.source // "<unknown condition>"' <<< "$d")
+        local pos="$file"
+        [[ -n "$line" ]] && pos="${file}:${line}"
+        printf '    - %s\n' "$pos"
+        printf '        would set when %b%s%b\n' "$C_CYAN" "$guard_src" "$C_RESET"
+      done < <(jq -c '.filteredOutDefinitions[]' <<< "$ast")
+    fi
+    if [[ -n "$hint" ]]; then
+      echo
+      printf '  %bHint:%b %s\n' "$C_BOLD" "$C_RESET" "$hint"
+    fi
+  fi
+}
+
+render_why_not_brief() {
+  local ast="$1"
+  local path isExplicitlySet filtered_count
+  path=$(jq -r '.path' <<< "$ast")
+  isExplicitlySet=$(jq -r '.isExplicitlySet' <<< "$ast")
+  filtered_count=$(jq -r '.filteredOutDefinitions | length' <<< "$ast")
+  if [[ "$isExplicitlySet" == "true" ]]; then
+    printf '%s: explicitly set\n' "$path"
+  else
+    printf '%s: NOT explicitly set (%d filtered-out def%s)\n' \
+      "$path" "$filtered_count" "$(((filtered_count == 1) ? "" : "s"))"
+  fi
+}
+
 case "$format" in
   json)
     printf '%s\n' "$ast_json"
@@ -677,6 +773,7 @@ case "$format" in
     case "$subcommand" in
       what-sets) render_what_sets "$ast_json" ;;
       search) render_search "$ast_json" ;;
+      why-not) render_why_not "$ast_json" ;;
       *) render_tree "$ast_json" ;;
     esac
     ;;
@@ -684,6 +781,7 @@ case "$format" in
     case "$subcommand" in
       what-sets) render_what_sets_brief "$ast_json" ;;
       search) render_search_brief "$ast_json" ;;
+      why-not) render_why_not_brief "$ast_json" ;;
       *) render_brief "$ast_json" ;;
     esac
     ;;
@@ -703,6 +801,19 @@ if [[ "$subcommand" == "search" ]]; then
   total="$(printf '%s' "$ast_json" | jq -r '.totalMatches')"
   if [[ "$total" == "0" ]]; then
     exit 2
+  fi
+  exit 0
+fi
+
+# why-not: exit 0 when the option is explicitly set or has filtered-out
+# candidates we can report on; exit 1 when there is literally nothing
+# but the type default (informational, mirrors the "declared but
+# undefined" exit on resolve).
+if [[ "$subcommand" == "why-not" ]]; then
+  is_explicit="$(printf '%s' "$ast_json" | jq -r '.isExplicitlySet')"
+  filtered="$(printf '%s' "$ast_json" | jq -r '.filteredOutDefinitions | length')"
+  if [[ "$is_explicit" == "false" ]] && [[ "$filtered" == "0" ]]; then
+    exit 1
   fi
   exit 0
 fi

@@ -104,7 +104,14 @@ rec {
     let
       pathParts = splitPath path;
 
-      surface = internal.fromOptions { inherit options pathParts; };
+      surface = internal.fromOptions {
+        inherit
+          options
+          pathParts
+          modules
+          config
+          ;
+      };
       moduleWalk =
         if surface.kind != "option" then
           { definitions = [ ]; }
@@ -176,7 +183,14 @@ rec {
     }:
     let
       pathParts = splitPath path;
-      surface = internal.fromOptions { inherit options pathParts; };
+      surface = internal.fromOptions {
+        inherit
+          options
+          pathParts
+          modules
+          config
+          ;
+      };
       moduleWalk =
         if surface.kind != "option" then
           { definitions = [ ]; }

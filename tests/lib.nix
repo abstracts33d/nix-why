@@ -50,6 +50,10 @@ let
     "type-mismatch"
     # post-v0.5 function-module application
     "function-module"
+    # post-v0.5 submodule traversal
+    "submodule-single"
+    "submodule-attrsof"
+    "submodule-nested"
   ];
 
   fixtureResults = map runFixture fixtureNames;

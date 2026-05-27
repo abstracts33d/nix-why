@@ -1,15 +1,82 @@
 { lib }:
 let
-  # Safely read opt.value: returns { value, error } where `error` is null
-  # on success and a string message when reading threw. Failure is
-  # treated as a likely merge conflict by the composition layer
-  # (why-option.nix surfaces it as a `conflicts[]` entry in v0.2).
+  submodulePivot = import ./submodule-pivot.nix { inherit lib; };
+
+  # Walk the options tree one path component at a time, pivoting
+  # through submodule boundaries when encountered.
   #
-  # We always tryEval opt.value regardless of isDefined: in NixOS,
-  # opt.value falls back to the option's declared `default` when no
-  # configuration provided a value, so callers get a meaningful value
-  # for declared-but-undefined options (and the default may itself
-  # throw, which we then capture).
+  # On success returns { found = true; opt = <leaf option>; }, on
+  # failure { found = false; }. Pivots consume the rest of the path
+  # via recursion into the submodule's evaluated options tree.
+  walkOptions =
+    {
+      options,
+      pathParts,
+      modules,
+      capturedArgs,
+      prefix,
+    }:
+    if pathParts == [ ] then
+      {
+        found = false;
+      }
+    else
+      let
+        head = builtins.head pathParts;
+        tail = builtins.tail pathParts;
+        nextPresent = builtins.isAttrs options && (options ? ${head});
+      in
+      if !nextPresent then
+        { found = false; }
+      else
+        let
+          next = options.${head};
+          nextType = next._type or null;
+          newPrefix = prefix ++ [ head ];
+        in
+        if nextType == "option" && tail == [ ] then
+          # Leaf option reached.
+          {
+            found = true;
+            opt = next;
+          }
+        else if nextType == "option" && tail != [ ] then
+          # Path continues but we hit an option - try a submodule pivot.
+          let
+            pivoted = submodulePivot.pivot {
+              opt = next;
+              inherit modules capturedArgs;
+              prefix = newPrefix;
+              remaining = tail;
+            };
+          in
+          if pivoted == null then
+            { found = false; }
+          else
+            walkOptions {
+              inherit (pivoted) options;
+              pathParts = pivoted.remainingAfter;
+              # After a pivot, the modules list resets to the synthetic
+              # modules built by the pivot. A *nested* submodule pivot
+              # encountered inside this evaluated subtree can then
+              # extract its own definitions from those synthetic
+              # modules, preserving per-module attribution across
+              # arbitrary nesting depth.
+              modules = pivoted.syntheticModules;
+              inherit capturedArgs;
+              prefix = [ ];
+            }
+        else if builtins.isAttrs next then
+          # Not an option - keep descending the attrset.
+          walkOptions {
+            options = next;
+            pathParts = tail;
+            inherit modules capturedArgs;
+            prefix = newPrefix;
+          }
+        else
+          { found = false; };
+
   tryReadValue =
     opt:
     let
@@ -26,10 +93,6 @@ let
         error = "value evaluation failed - likely a merge conflict (mkForce collision, type mismatch, or submodule key collision)";
       };
 
-  # Pair `opt.declarations` (list of file paths) with the matching entry
-  # of `opt.declarationPositions` (list of { file, line, column }). Older
-  # nixpkgs releases may not expose declarationPositions; in that case we
-  # return file-only records.
   buildDeclarations =
     opt:
     let
@@ -49,9 +112,6 @@ let
       }
     ) files;
 
-  # Each surviving definition (post-mkIf, post-priority filter) is a
-  # "winner" at the winning priority. from-modules.nix will later enrich
-  # these with line numbers, priorityKind, and guardedBy details.
   buildDefinitions =
     opt:
     let
@@ -69,23 +129,30 @@ let
     }) defs;
 in
 {
-  # fromOptions :: { options, pathParts } -> AST
-  #
-  # Reads the publicly documented `options.<path>.*` attributes of an
-  # evaluated NixOS-style option tree and returns a structured AST.
-  # Does NOT touch any module-system internals; only the documented
-  # option-type surface.
   fromOptions =
     {
       options,
       pathParts,
+      modules ? [ ],
+      config ? { },
     }:
     let
       path = lib.concatStringsSep "." pathParts;
-      raw = lib.attrByPath pathParts null options;
-      isOption = raw != null && builtins.isAttrs raw && ((raw._type or null) == "option");
+      tryArgs = builtins.tryEval (config._module.args or { });
+      capturedArgs = (if tryArgs.success then tryArgs.value else { }) // {
+        inherit lib config;
+      };
+      walked = walkOptions {
+        inherit
+          options
+          pathParts
+          modules
+          capturedArgs
+          ;
+        prefix = [ ];
+      };
     in
-    if raw == null then
+    if !walked.found then
       {
         inherit path;
         kind = "not-found";
@@ -97,31 +164,36 @@ in
         declarations = [ ];
         definitions = [ ];
       }
-    else if !isOption then
-      {
-        inherit path;
-        kind = "not-an-option";
-        type = null;
-        value = null;
-        valueError = null;
-        isDefined = false;
-        winningPriority = null;
-        declarations = [ ];
-        definitions = [ ];
-      }
     else
       let
-        readResult = tryReadValue raw;
+        raw = walked.opt;
+        isOption = raw != null && builtins.isAttrs raw && ((raw._type or null) == "option");
       in
-      {
-        inherit path;
-        kind = "option";
-        type = raw.type.name or null;
-        inherit (readResult) value;
-        valueError = readResult.error;
-        isDefined = raw.isDefined or false;
-        winningPriority = raw.highestPrio or null;
-        declarations = buildDeclarations raw;
-        definitions = buildDefinitions raw;
-      };
+      if !isOption then
+        {
+          inherit path;
+          kind = "not-an-option";
+          type = null;
+          value = null;
+          valueError = null;
+          isDefined = false;
+          winningPriority = null;
+          declarations = [ ];
+          definitions = [ ];
+        }
+      else
+        let
+          readResult = tryReadValue raw;
+        in
+        {
+          inherit path;
+          kind = "option";
+          type = raw.type.name or null;
+          inherit (readResult) value;
+          valueError = readResult.error;
+          isDefined = raw.isDefined or false;
+          winningPriority = raw.highestPrio or null;
+          declarations = buildDeclarations raw;
+          definitions = buildDefinitions raw;
+        };
 }

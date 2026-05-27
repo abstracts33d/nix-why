@@ -18,12 +18,9 @@
 
   path = "services.foo.enable";
 
-  # Nested options under services.foo.*. NB: this is direct nesting via
-  # the dotted-attribute syntax, not a `lib.types.submodule` wrapper.
-  # Real submodule types expose their sub-options through
-  # `option.type.getSubOptions`, not as siblings on the parent option,
-  # so direct path traversal into `options.services.foo.<sub>` would
-  # not find them. Walking into a submodule is a planned v0.2+
-  # enhancement; v0.1 covers direct nesting only.
+  # Direct nested options under services.foo.* (no submodule wrapper).
+  # Companion fixtures: submodule-single, submodule-attrsof,
+  # submodule-nested cover the real lib.types.submodule path now that
+  # submodule traversal is shipped.
   assertions = ast: ast.kind == "option" && ast.value == true && ast.type == "bool";
 }

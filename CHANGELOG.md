@@ -8,7 +8,7 @@ uses semantic versioning.
 
 ### Post-v0.5 polish
 
-Three deferred items from the original brainstorm are now shipped:
+Four deferred items from the original brainstorm are now shipped:
 
 - **Function-module application** (lib): `from-modules.nix` no longer
   skips function modules. It reads `config._module.args` from the
@@ -38,12 +38,35 @@ Three deferred items from the original brainstorm are now shipped:
 Documented in docs/roadmap/v0.5-overlay-attribution.md (Limitations
 section).
 
-Submodule traversal (sub-options behind `lib.types.submodule`) was
-also on the deferred list but remains deferred: getSubOptions
-returns pre-eval declarations while definitions live in a separate
-evaluation channel; reaching them properly requires a significant
-restructure of from-options. Documented inline in the
-`nested-submodule` fixture.
+- **Submodule traversal** (lib): paths that cross
+  `lib.types.submodule` boundaries (e.g. `services.foo.enable` where
+  `services.foo` is declared with a submodule type) now resolve
+  correctly. The new `lib/internal/submodule-pivot.nix` detects
+  submodule-typed options during `from-options`'s path walk, extracts
+  each user module's contribution at the boundary prefix (preserving
+  `mkIf` / `mkOverride` / `mkMerge` wrappers via the new
+  `descendWithWrappers` helper), and re-evaluates the submodule via
+  `lib.evalModules` with `getSubModules ++ syntheticModules`. The
+  walker then continues path traversal in the resulting options tree.
+
+  Supports:
+    - single-instance `submodule` - the common service-options shape
+    - `attrsOf (submodule {...})` - e.g.
+      `services.nginx.virtualHosts.<key>.foo`; user-supplied key is
+      consumed from the path during the pivot
+    - arbitrary nesting - the pivot returns its synthetic modules so
+      a nested submodule pivot can extract from them, preserving
+      per-module attribution at every level
+
+  Not supported (documented limitation):
+    - `listOf (submodule {...})` - NixOS does not expose stable path
+      syntax for indexed list-element introspection, so this remains
+      out of scope
+
+  New fixtures: `submodule-single`, `submodule-attrsof`,
+  `submodule-nested`. The pre-existing `nested-submodule` fixture
+  (direct nested options without a submodule wrapper) is preserved
+  as the simpler companion case.
 
 ### v0.5 - overlay attribution
 

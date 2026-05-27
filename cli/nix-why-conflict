@@ -1,0 +1,251 @@
+#!/usr/bin/env bash
+# nix-why-conflict - focused view on merge conflicts for a single option
+#
+# Reuses nix-why's resolve introspection and prints only the conflicts[]
+# block - useful when you already suspect a merge conflict (mkForce
+# collision, type mismatch, submodule key collision) and want a clean
+# "yes/no + what collides" answer without the full resolution tree.
+#
+# Usage:
+#   nix-why-conflict <flake-target> <option-path> [flags]
+
+set -euo pipefail
+
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+: "${NIX_WHY_LIB:=${self_dir}/../lib}"
+
+if [[ ! -f "${NIX_WHY_LIB}/default.nix" ]]; then
+  echo "nix-why-conflict: NIX_WHY_LIB does not point at a valid library directory: ${NIX_WHY_LIB}" >&2
+  exit 64
+fi
+
+print_usage() {
+  cat << 'EOF'
+nix-why-conflict - focused view on merge conflicts
+
+Usage:
+  nix-why-conflict <flake-target> <option-path> [flags]
+
+Flags:
+  --json              Emit the conflicts[] block (and minimal context) as JSON
+  --no-color          Force-disable ANSI escapes (also respects NO_COLOR)
+  --show-trace        Pass through to nix eval
+  --adapter <name>    Force a specific adapter
+  -h, --help          Show this help
+
+Exit codes:
+  0   option resolved cleanly, no conflicts
+  1   at least one conflict surfaced
+  2   option does not exist
+  3   flake target not found or wrong schema
+  4   evaluation error
+  64  usage error
+EOF
+}
+
+format="tree"
+adapter_name=""
+no_color=0
+show_trace=0
+positional=()
+
+if [[ -n "${NO_COLOR:-}" ]] || ! [[ -t 1 ]]; then
+  no_color=1
+fi
+
+while (($# > 0)); do
+  case "$1" in
+    --json)
+      format="json"
+      shift
+      ;;
+    --no-color)
+      no_color=1
+      shift
+      ;;
+    --show-trace)
+      show_trace=1
+      shift
+      ;;
+    --adapter)
+      adapter_name="$2"
+      shift 2
+      ;;
+    --adapter=*)
+      adapter_name="${1#*=}"
+      shift
+      ;;
+    -h | --help)
+      print_usage
+      exit 0
+      ;;
+    -*)
+      echo "nix-why-conflict: unknown flag '$1'" >&2
+      print_usage >&2
+      exit 64
+      ;;
+    *)
+      positional+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if (("${#positional[@]}" != 2)); then
+  echo "nix-why-conflict: expected <flake-target> <option-path> (got ${#positional[@]} positional args)" >&2
+  print_usage >&2
+  exit 64
+fi
+
+flake_target="${positional[0]}"
+option_path="${positional[1]}"
+
+if [[ "$flake_target" == *"#"* ]]; then
+  flake_ref="${flake_target%%#*}"
+  attr_expr="${flake_target#*#}"
+else
+  flake_ref="$flake_target"
+  attr_expr=""
+fi
+[[ -z "$flake_ref" ]] && flake_ref="."
+
+if ((no_color)); then
+  C_RESET=""
+  C_BOLD=""
+  C_DIM=""
+  C_GREEN=""
+  C_RED=""
+  C_CYAN=""
+else
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+  C_GREEN=$'\033[32m'
+  C_RED=$'\033[31m'
+  C_CYAN=$'\033[36m'
+fi
+
+nix_expr=$(
+  cat << NIXEXPR
+let
+  lib = (import <nixpkgs> { }).lib;
+  nixWhy = import ${NIX_WHY_LIB} { inherit lib; };
+  flake = builtins.getFlake ("${flake_ref}");
+
+  schemas = [ "nixosConfigurations" "darwinConfigurations" "homeConfigurations" ];
+  attr = "${attr_expr}";
+
+  resolveAttr =
+    let
+      parts = lib.splitString "." attr;
+      headPart = builtins.head parts;
+    in
+    if attr == "" then
+      throw "nix-why-conflict: no attribute path given after '#'"
+    else if lib.elem headPart schemas then
+      lib.attrByPath parts (throw "nix-why-conflict: attribute path '\${attr}' not found in flake") flake
+    else
+      let
+        tries = lib.filter (s: lib.hasAttrByPath ([ s ] ++ parts) flake) schemas;
+      in
+      if tries == [ ] then
+        throw "nix-why-conflict: '\${attr}' did not match any of \${lib.concatStringsSep ", " schemas} in the flake. Use the explicit form."
+      else if (builtins.length tries) > 1 then
+        throw "nix-why-conflict: '\${attr}' is ambiguous - found under \${lib.concatStringsSep ", " tries}. Use the explicit form."
+      else
+        lib.attrByPath ([ builtins.head tries ] ++ parts) (throw "unreachable") flake;
+
+  target = resolveAttr;
+  adapter_name = "${adapter_name}";
+  adapted = nixWhy.adapters.adapt {
+    name = if adapter_name == "" then null else adapter_name;
+    flakeOutput = target;
+  };
+  ast = nixWhy.resolve {
+    inherit (adapted) modules options;
+    path = "${option_path}";
+  };
+in
+{
+  inherit (ast) path kind type valueError conflicts;
+}
+NIXEXPR
+)
+
+nix_eval_args=(--impure --json --expr "${nix_expr}")
+((show_trace)) && nix_eval_args+=(--show-trace)
+
+stderr_file="$(mktemp)"
+trap 'rm -f "${stderr_file}"' EXIT
+ast_json=""
+nix_rc=0
+ast_json="$(nix eval "${nix_eval_args[@]}" 2> "${stderr_file}")" || nix_rc=$?
+nix_stderr="$(cat "${stderr_file}")"
+
+if ((nix_rc != 0)); then
+  case "$nix_stderr" in
+    *"nix-why-conflict: '"*"' did not match any of "* | \
+      *"nix-why-conflict: '"*"' is ambiguous"* | \
+      *"nix-why-conflict: attribute path '"*"' not found"* | \
+      *"nix-why-conflict: no attribute path given after"* | \
+      *"nix-why: could not detect adapter"* | \
+      *"nix-why: unknown adapter"*)
+      echo "$nix_stderr" >&2
+      exit 3
+      ;;
+    *)
+      echo "$nix_stderr" >&2
+      exit 4
+      ;;
+  esac
+fi
+
+kind="$(printf '%s' "$ast_json" | jq -r '.kind')"
+case "$kind" in
+  "option") ;;
+  "not-found")
+    echo "nix-why-conflict: option '${option_path}' does not exist" >&2
+    exit 2
+    ;;
+  "not-an-option")
+    echo "nix-why-conflict: '${option_path}' exists but is not a leaf option" >&2
+    exit 2
+    ;;
+  *)
+    echo "nix-why-conflict: unexpected AST kind '${kind}'" >&2
+    exit 4
+    ;;
+esac
+
+conflict_count="$(printf '%s' "$ast_json" | jq -r '.conflicts | length')"
+
+if [[ "$format" == "json" ]]; then
+  printf '%s\n' "$ast_json"
+  ((conflict_count == 0)) && exit 0 || exit 1
+fi
+
+path="$(printf '%s' "$ast_json" | jq -r '.path')"
+type="$(printf '%s' "$ast_json" | jq -r '.type // "unknown"')"
+printf '%b%s%b : %b%s%b\n' "$C_BOLD" "$path" "$C_RESET" "$C_CYAN" "$type" "$C_RESET"
+
+if ((conflict_count == 0)); then
+  printf '  %bno conflicts%b - option resolves cleanly\n' "$C_GREEN" "$C_RESET"
+  exit 0
+fi
+
+while IFS= read -r conflict; do
+  msg=$(jq -r '.message' <<< "$conflict")
+  printf '\n  %b⚠ CONFLICT%b: %s\n' "$C_RED" "$C_RESET" "$msg"
+  printf '  Involved definitions:\n'
+  while IFS= read -r def; do
+    file=$(jq -r '.file // "<unknown>"' <<< "$def")
+    line=$(jq -r '.line // empty' <<< "$def")
+    priorityKind=$(jq -r '.priorityKind // "unknown"' <<< "$def")
+    value=$(jq -c '.value' <<< "$def")
+    pos="$file"
+    [[ -n "$line" ]] && pos="${file}:${line}"
+    printf '    - %s [%s] %b→%b %s\n' "$pos" "$priorityKind" "$C_DIM" "$C_RESET" "$value"
+  done < <(jq -c '.involvedDefinitions[]' <<< "$conflict")
+done < <(jq -c '.conflicts[]' <<< "$ast_json")
+
+exit 1

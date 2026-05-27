@@ -6,6 +6,41 @@ uses semantic versioning.
 
 ## Unreleased
 
+### Sibling tools
+
+Added three siblings under the `nix-why` umbrella, each a separate
+flake `apps` and `packages` entry:
+
+- **`nix-why-conflict <flake-target> <option-path>`** - thin focused
+  view on v0.2's conflict surface. Prints only the conflicts[] block
+  from `resolve`'s AST and an exit code: 0 = clean, 1 = conflicts
+  found. Useful when you already suspect a merge conflict and want a
+  one-shot yes/no answer.
+
+- **`nix-why-recursion`** - parses a `nix eval --show-trace` capture
+  from stdin and surfaces infinite-recursion cycles. Two views: the
+  last N frames before the error (most informative) and a frequency
+  table of repeated (file, line, description) frames (the inner
+  cycle). Pure text parser; no module-system introspection. JSON
+  output supported.
+
+- **`nix-why-overlay <flake-target>`** (MVP) - extracts the overlay
+  list from a NixOS / nix-darwin / home-manager evaluated config or
+  a flake's `legacyPackages.<system>`, applies each overlay against
+  the resolved pkgs, and prints the top-level attributes each
+  contributes. Per-attribute "which overlay set X?" attribution is
+  not yet implemented - the fixed-point evaluation model differs
+  enough from evalModules that it deserves its own iteration.
+
+Tests: tests/siblings.bats covers argv parsing, help text, error
+paths, and (for nix-why-recursion) parsing a synthetic trace + JSON
+emission.
+
+Flake outputs added: `packages.<sys>.{nix-why-conflict,
+nix-why-recursion, nix-why-overlay}` and matching `apps.<sys>` apps.
+A new `mkCliScript` helper in flake.nix consolidates the four
+packaging derivations.
+
 ### v0.4 - "why is this option not explicitly set?"
 
 Added:

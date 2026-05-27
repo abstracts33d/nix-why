@@ -3,9 +3,10 @@
 > Why is this NixOS / home-manager / nix-darwin option set to this value?
 
 `nix-why` is an umbrella for small, focused tools that answer diagnostic
-questions about a Nix evaluation. The current binary, `nix-why-option`,
-explains exactly why an option has the value it has and helps you discover
-where options come from in the first place.
+questions about a Nix evaluation. The flagship `nix-why-option` explains
+exactly why an option has the value it has; the sibling tools
+(`nix-why-conflict`, `nix-why-recursion`, `nix-why-overlay`) cover three
+adjacent investigations.
 
 ## Status
 
@@ -14,7 +15,7 @@ roadmap's v0.4 milestone (option resolution, conflict explanation,
 reverse lookup, search, "why is this not explicitly set?").
 Documentation is local-only under `docs/` while the design stabilises.
 
-## Subcommands
+## `nix-why-option` subcommands
 
 | Subcommand | Purpose |
 |---|---|
@@ -23,6 +24,14 @@ Documentation is local-only under `docs/` while the design stabilises.
 | `what-sets` | list every module that defines an option, regardless of whether it won |
 | `why-not` | explain why an option is *not* explicitly set, surfacing mkIf-filtered candidates |
 | `search <pattern>` | find option paths in the target by infix pattern |
+
+## Sibling tools
+
+| Tool | Purpose |
+|---|---|
+| `nix-why-conflict <target> <option>` | Print only the merge-conflict block for an option. Exit 0 if clean, 1 if conflicts found. |
+| `nix-why-recursion < trace.log` | Read a Nix `--show-trace` capture from stdin, surface the infinite-recursion cycle (last frames + frequency table). |
+| `nix-why-overlay <target>` | List the nixpkgs overlays applied to a flake target and the attributes each contributes (MVP - per-attribute attribution comes later). |
 
 ## Example: resolve
 

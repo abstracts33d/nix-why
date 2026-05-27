@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+# nix-why-overlay - list nixpkgs overlays applied to a flake target
+#
+# MVP scope:
+#   - point at a NixOS / nix-darwin / home-manager config OR a flake's
+#     legacyPackages.<system>
+#   - extract config.nixpkgs.overlays (or pkgs.overlays as fallback)
+#   - for each overlay, evaluate it against the resolved final/prev
+#     and report the top-level attribute names it contributes
+#
+# Per-attribute "which overlay set this attribute?" attribution is
+# deferred to the next iteration - it requires re-folding overlays
+# step by step and diffing each result, which has very different
+# evaluation characteristics from module-system introspection.
+
+set -euo pipefail
+
+print_usage() {
+  cat << 'EOF'
+nix-why-overlay - list nixpkgs overlays applied to a flake target
+
+Usage:
+  nix-why-overlay <flake-target> [flags]
+
+Flake targets:
+  .#nixosConfigurations.<host>
+  .#darwinConfigurations.<host>
+  .#homeConfigurations."<user@host>"
+  .#legacyPackages.<system>
+
+Flags:
+  --json              Emit the overlay list as JSON
+  --no-color          Force-disable ANSI escapes (also respects NO_COLOR)
+  --limit N           Cap per-overlay attribute list length (default 20)
+  --show-trace        Pass through to nix eval
+  -h, --help          Show this help
+
+Exit codes:
+  0   overlays listed (zero or more)
+  3   flake target not found or wrong schema
+  4   evaluation error
+  64  usage error
+EOF
+}
+
+format="tree"
+no_color=0
+show_trace=0
+attr_limit=20
+positional=()
+
+if [[ -n "${NO_COLOR:-}" ]] || ! [[ -t 1 ]]; then
+  no_color=1
+fi
+
+while (($# > 0)); do
+  case "$1" in
+    --json)
+      format="json"
+      shift
+      ;;
+    --no-color)
+      no_color=1
+      shift
+      ;;
+    --limit)
+      attr_limit="$2"
+      shift 2
+      ;;
+    --limit=*)
+      attr_limit="${1#*=}"
+      shift
+      ;;
+    --show-trace)
+      show_trace=1
+      shift
+      ;;
+    -h | --help)
+      print_usage
+      exit 0
+      ;;
+    -*)
+      echo "nix-why-overlay: unknown flag '$1'" >&2
+      print_usage >&2
+      exit 64
+      ;;
+    *)
+      positional+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if (("${#positional[@]}" != 1)); then
+  echo "nix-why-overlay: expected <flake-target> (got ${#positional[@]} positional args)" >&2
+  print_usage >&2
+  exit 64
+fi
+
+flake_target="${positional[0]}"
+
+if [[ "$flake_target" == *"#"* ]]; then
+  flake_ref="${flake_target%%#*}"
+  attr_expr="${flake_target#*#}"
+else
+  flake_ref="$flake_target"
+  attr_expr=""
+fi
+[[ -z "$flake_ref" ]] && flake_ref="."
+
+if ((no_color)); then
+  C_RESET=""
+  C_BOLD=""
+  C_DIM=""
+  C_CYAN=""
+  C_YELLOW=""
+else
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+  C_CYAN=$'\033[36m'
+  C_YELLOW=$'\033[33m'
+fi
+
+# Build the Nix expression. The strategy:
+#   1. Resolve the flake target as an attrByPath of the flake.
+#   2. Probe known shapes for overlays:
+#        nixos / darwin / hm:    config.nixpkgs.overlays
+#                                pkgs.overlays (older shapes)
+#        legacyPackages.<sys>:   .overlays   (raw nixpkgs has this attr)
+#   3. For each overlay, apply it against final=prev=<the resolved
+#      pkgs> wrapped in tryEval and report attrNames of the result.
+nix_expr=$(
+  cat << NIXEXPR
+let
+  lib = (import <nixpkgs> { }).lib;
+  flake = builtins.getFlake ("${flake_ref}");
+
+  attr = "${attr_expr}";
+  parts = if attr == "" then [ ] else lib.splitString "." attr;
+
+  target =
+    if parts == [ ]
+    then throw "nix-why-overlay: no attribute path given after '#'"
+    else lib.attrByPath parts (throw "nix-why-overlay: attribute path '\${attr}' not found in flake") flake;
+
+  # Best-effort discovery of (pkgs, overlays) from the target's shape.
+  discovery =
+    let
+      tries = [
+        # NixOS / nix-darwin / HM evaluated config
+        (
+          if (target ? config && target.config ? nixpkgs && target.config.nixpkgs ? overlays)
+          then { pkgs = target.config.nixpkgs.pkgs or (target._module.args.pkgs or null); overlays = target.config.nixpkgs.overlays; }
+          else null
+        )
+        # Some configs surface pkgs at _module.args
+        (
+          if (target ? _module && target._module ? args && target._module.args ? pkgs && target._module.args.pkgs ? overlays)
+          then { inherit (target._module.args) pkgs; overlays = target._module.args.pkgs.overlays; }
+          else null
+        )
+        # legacyPackages.<system> shape (raw nixpkgs result)
+        (
+          if (target ? overlays && target ? pkgs && builtins.isList target.overlays)
+          then { inherit (target) pkgs overlays; }
+          else null
+        )
+        # legacyPackages.<system> shape where the target IS pkgs
+        (
+          if (target ? lib && target ? stdenv && target ? overlays && builtins.isList target.overlays)
+          then { pkgs = target; inherit (target) overlays; }
+          else null
+        )
+      ];
+      hit = lib.findFirst (x: x != null) null tries;
+    in
+    hit;
+
+in
+if discovery == null then
+  {
+    error = "could not locate overlays on the target. Tried: config.nixpkgs.overlays, _module.args.pkgs.overlays, target.overlays. Point me at .#nixosConfigurations.<host> or .#legacyPackages.<system>.";
+    overlays = [ ];
+  }
+else
+  let
+    pkgs = discovery.pkgs;
+    overlays = discovery.overlays;
+
+    describeOverlay =
+      idx: overlay:
+      let
+        applied = builtins.tryEval (overlay pkgs pkgs);
+        names =
+          if applied.success && builtins.isAttrs applied.value
+          then builtins.attrNames applied.value
+          else [ ];
+        appliedOk = applied.success;
+      in
+      {
+        index = idx;
+        appliedOk = appliedOk;
+        attributeCount = builtins.length names;
+        attributes = names;
+      };
+
+    described = lib.imap0 describeOverlay overlays;
+  in
+  {
+    error = null;
+    overlayCount = builtins.length overlays;
+    overlays = described;
+  }
+NIXEXPR
+)
+
+nix_eval_args=(--impure --json --expr "${nix_expr}")
+((show_trace)) && nix_eval_args+=(--show-trace)
+
+stderr_file="$(mktemp)"
+trap 'rm -f "${stderr_file}"' EXIT
+nix_rc=0
+ast_json="$(nix eval "${nix_eval_args[@]}" 2> "${stderr_file}")" || nix_rc=$?
+nix_stderr="$(cat "${stderr_file}")"
+
+if ((nix_rc != 0)); then
+  case "$nix_stderr" in
+    *"nix-why-overlay: attribute path"* | \
+      *"nix-why-overlay: no attribute path given"*)
+      echo "$nix_stderr" >&2
+      exit 3
+      ;;
+    *)
+      echo "$nix_stderr" >&2
+      exit 4
+      ;;
+  esac
+fi
+
+err="$(printf '%s' "$ast_json" | jq -r '.error // empty')"
+if [[ -n "$err" ]]; then
+  echo "nix-why-overlay: $err" >&2
+  exit 3
+fi
+
+if [[ "$format" == "json" ]]; then
+  printf '%s\n' "$ast_json"
+  exit 0
+fi
+
+overlay_count="$(printf '%s' "$ast_json" | jq -r '.overlayCount')"
+printf '%btarget:%b %s\n' "$C_BOLD" "$C_RESET" "$flake_target"
+printf '%boverlays:%b %d\n\n' "$C_BOLD" "$C_RESET" "$overlay_count"
+
+if ((overlay_count == 0)); then
+  printf '  %b(no overlays applied)%b\n' "$C_DIM" "$C_RESET"
+  exit 0
+fi
+
+while IFS= read -r overlay; do
+  idx=$(jq -r '.index' <<< "$overlay")
+  ok=$(jq -r '.appliedOk' <<< "$overlay")
+  count=$(jq -r '.attributeCount' <<< "$overlay")
+  printf '  %boverlay %d%b' "$C_CYAN" "$idx" "$C_RESET"
+  if [[ "$ok" == "false" ]]; then
+    printf ' %b(evaluation failed; cannot enumerate attributes)%b\n' "$C_YELLOW" "$C_RESET"
+    continue
+  fi
+  printf '  %b%d attribute%s contributed%b\n' \
+    "$C_DIM" "$count" "$(((count == 1) ? "" : "s"))" "$C_RESET"
+  while IFS= read -r attr; do
+    printf '    - %s\n' "$attr"
+  done < <(jq -r --argjson lim "$attr_limit" '.attributes[0:$lim][]' <<< "$overlay")
+  if ((count > attr_limit)); then
+    printf '    %b...%d more (raise --limit to see)%b\n' "$C_DIM" "$((count - attr_limit))" "$C_RESET"
+  fi
+done < <(jq -c '.overlays[]' <<< "$ast_json")
+
+exit 0

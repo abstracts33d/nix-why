@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+# nix-why-recursion - surface infinite-recursion cycles in --show-trace output
+#
+# Reads a Nix `--show-trace` stderr capture, detects "infinite recursion
+# encountered", extracts the (description, file:line:col) frame pairs,
+# and reports two views:
+#   - last N frames before the error (the call site closest to the cycle)
+#   - frame frequency table (the (file, line) pairs that appear most are
+#     usually the inner cycle)
+#
+# Usage:
+#   nix eval .#foo --show-trace 2>&1 | nix-why-recursion
+#   nix-why-recursion --limit 15 < trace.log
+#
+# The tool is intentionally simple: no module-system code, no nix eval
+# invocation. Hand it a trace, it tells you where the loop lives.
+
+set -euo pipefail
+
+print_usage() {
+  cat << 'EOF'
+nix-why-recursion - surface infinite-recursion cycles in --show-trace output
+
+Usage:
+  nix eval ... --show-trace 2>&1 | nix-why-recursion [flags]
+  nix-why-recursion [flags] < trace.log
+
+Flags:
+  --limit N           How many frames to show per section (default 10)
+  --json              Emit JSON: { hasRecursion, lastFrames[], topFrames[] }
+  --no-color          Force-disable ANSI escapes (also respects NO_COLOR)
+  -h, --help          Show this help
+
+Exit codes:
+  0   recursion detected, report emitted
+  1   no "infinite recursion" marker in input - input may not be a
+      Nix --show-trace capture, or the eval succeeded
+  64  usage error
+EOF
+}
+
+limit=10
+format="tree"
+no_color=0
+
+if [[ -n "${NO_COLOR:-}" ]] || ! [[ -t 1 ]]; then
+  no_color=1
+fi
+
+while (($# > 0)); do
+  case "$1" in
+    --limit)
+      limit="$2"
+      shift 2
+      ;;
+    --limit=*)
+      limit="${1#*=}"
+      shift
+      ;;
+    --json)
+      format="json"
+      shift
+      ;;
+    --no-color)
+      no_color=1
+      shift
+      ;;
+    -h | --help)
+      print_usage
+      exit 0
+      ;;
+    -*)
+      echo "nix-why-recursion: unknown flag '$1'" >&2
+      print_usage >&2
+      exit 64
+      ;;
+    *)
+      echo "nix-why-recursion: unexpected positional arg '$1' (input is read from stdin)" >&2
+      print_usage >&2
+      exit 64
+      ;;
+  esac
+done
+
+if ((no_color)); then
+  C_RESET=""
+  C_BOLD=""
+  C_DIM=""
+  C_RED=""
+  C_CYAN=""
+  C_YELLOW=""
+else
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+  C_RED=$'\033[31m'
+  C_CYAN=$'\033[36m'
+  C_YELLOW=$'\033[33m'
+fi
+
+trace="$(cat)"
+
+if ! [[ "$trace" == *"infinite recursion"* ]]; then
+  echo "nix-why-recursion: no 'infinite recursion' marker found in input" >&2
+  exit 1
+fi
+
+# Parse frames. A Nix --show-trace frame is two lines:
+#   "       … while <description>"
+#   "         at /path/to/file.nix:LINE:COL:"
+#
+# We collect them as tab-separated records: "FILE:LINE:COL<TAB>description".
+# Awk is the right tool for this kind of line-pair stitching.
+frames_tsv="$(printf '%s\n' "$trace" | awk '
+  /while / {
+    sub(/^[[:space:]]+/, "");
+    sub(/^…[[:space:]]+/, "");
+    sub(/^\.\.\.[[:space:]]+/, "");
+    desc = $0;
+    next;
+  }
+  /^[[:space:]]+at .+:[0-9]+:[0-9]+:/ {
+    sub(/^[[:space:]]+at /, "");
+    sub(/:$/, "");
+    pos = $0;
+    if (desc != "") {
+      printf "%s\t%s\n", pos, desc;
+      desc = "";
+    }
+  }
+')"
+
+frame_count="$(printf '%s' "$frames_tsv" | grep -c $'\t' || true)"
+
+if ((frame_count == 0)); then
+  echo "nix-why-recursion: 'infinite recursion' marker present but no parseable frames found" >&2
+  echo "  - is the input a real --show-trace capture from nix eval?" >&2
+  exit 1
+fi
+
+# Frequency view: count (file:line:col, description) occurrences.
+# Sort by count desc.
+top_frames_tsv="$(printf '%s\n' "$frames_tsv" | sort | uniq -c | sort -rn | head -n "${limit}")"
+
+# Last N frames in input order.
+last_frames_tsv="$(printf '%s\n' "$frames_tsv" | tail -n "${limit}")"
+
+if [[ "$format" == "json" ]]; then
+  to_json_array() {
+    local input="$1"
+    if [[ -z "$input" ]]; then
+      printf '[]'
+      return
+    fi
+    printf '%s\n' "$input" | jq -Rsc '
+      split("\n")
+      | map(select(length > 0))
+      | map(
+          (split("\t")) as $parts
+          | { pos: $parts[0], description: ($parts[1] // "") }
+        )
+    '
+  }
+
+  to_top_json() {
+    local input="$1"
+    if [[ -z "$input" ]]; then
+      printf '[]'
+      return
+    fi
+    printf '%s\n' "$input" | jq -Rsc '
+      split("\n")
+      | map(select(length > 0))
+      | map(
+          capture("^[[:space:]]*(?<count>[0-9]+)[[:space:]]+(?<rest>.*)$")
+          | { count: (.count | tonumber), rest: .rest }
+          | (.rest | split("\t")) as $parts
+          | { count: .count, pos: $parts[0], description: ($parts[1] // "") }
+        )
+    '
+  }
+
+  last_json="$(to_json_array "$last_frames_tsv")"
+  top_json="$(to_top_json "$top_frames_tsv")"
+  jq -n --argjson lastFrames "$last_json" --argjson topFrames "$top_json" '
+    { hasRecursion: true, lastFrames: $lastFrames, topFrames: $topFrames }
+  '
+  exit 0
+fi
+
+printf '%b infinite recursion detected%b (%d frames in trace)\n' "$C_RED" "$C_RESET" "$frame_count"
+echo
+
+printf '%bLast %d frames before the error:%b\n' "$C_BOLD" "$limit" "$C_RESET"
+if [[ -n "$last_frames_tsv" ]]; then
+  printf '%s\n' "$last_frames_tsv" | awk -F'\t' '
+    { printf "  %s\n        %s\n", $1, $2 }
+  '
+fi
+echo
+
+printf '%bMost frequent frames%b %b(top %d)%b%b - likely cycle:%b\n' \
+  "$C_BOLD" "$C_RESET" "$C_DIM" "$limit" "$C_RESET" "$C_RESET"
+if [[ -n "$top_frames_tsv" ]]; then
+  printf '%s\n' "$top_frames_tsv" | awk -F'\t' -v cyellow="$C_YELLOW" -v creset="$C_RESET" -v ccyan="$C_CYAN" '
+    {
+      # The count is leading the first field (sort | uniq -c prepends it).
+      # Split off the count.
+      n = split($1, parts, /[[:space:]]+/);
+      count = parts[2];
+      pos = "";
+      for (i = 3; i <= n; i++) pos = pos (i==3?"":" ") parts[i];
+      printf "  %s%5sx%s  %s%s%s\n        %s\n", cyellow, count, creset, ccyan, pos, creset, $2;
+    }
+  '
+fi
+
+exit 0

@@ -22,11 +22,20 @@
       pkgsFor = system: nixpkgs.legacyPackages.${system};
       treefmtEval = eachSystem (system: treefmt-nix.lib.evalModule (pkgsFor system) ./treefmt.nix);
 
-      mkNixWhyOption =
+      # Helper: package one of the cli scripts. All siblings share the
+      # same shape - wrap with NIX_WHY_LIB set to the shared lib copy
+      # and jq + nix in PATH.
+      mkCliScript =
+        {
+          name,
+          desc,
+          needsLib ? true,
+          extraDeps ? [ ],
+        }:
         pkgs:
         pkgs.stdenv.mkDerivation {
-          pname = "nix-why-option";
-          version = "0.1.0-pre";
+          pname = name;
+          version = "0.4.0-pre";
           src = ./.;
           nativeBuildInputs = [ pkgs.makeWrapper ];
           dontConfigure = true;
@@ -34,25 +43,50 @@
           installPhase = ''
             runHook preInstall
             mkdir -p $out/bin $out/share/nix-why
-            cp -r lib $out/share/nix-why/lib
-            install -Dm755 cli/nix-why-option $out/bin/nix-why-option
-            wrapProgram $out/bin/nix-why-option \
-              --set NIX_WHY_LIB $out/share/nix-why/lib \
+            ${nixpkgs.lib.optionalString needsLib "cp -r lib $out/share/nix-why/lib"}
+            install -Dm755 cli/${name} $out/bin/${name}
+            wrapProgram $out/bin/${name} \
+              ${nixpkgs.lib.optionalString needsLib "--set NIX_WHY_LIB $out/share/nix-why/lib"} \
               --prefix PATH : ${
-                nixpkgs.lib.makeBinPath [
-                  pkgs.jq
-                  pkgs.nix
-                ]
+                nixpkgs.lib.makeBinPath (
+                  [
+                    pkgs.jq
+                    pkgs.nix
+                  ]
+                  ++ extraDeps
+                )
               }
             runHook postInstall
           '';
           meta = {
-            description = "Module-system option resolution debugger";
-            mainProgram = "nix-why-option";
+            description = desc;
+            mainProgram = name;
             license = nixpkgs.lib.licenses.mit;
             platforms = nixpkgs.lib.platforms.unix;
           };
         };
+
+      mkNixWhyOption = mkCliScript {
+        name = "nix-why-option";
+        desc = "Module-system option resolution debugger";
+      };
+      mkNixWhyConflict = mkCliScript {
+        name = "nix-why-conflict";
+        desc = "Focused view on merge conflicts for a single option";
+      };
+      mkNixWhyRecursion = mkCliScript {
+        name = "nix-why-recursion";
+        desc = "Surface infinite-recursion cycles in --show-trace output";
+        # The recursion tool is a pure text parser; no library needed.
+        needsLib = false;
+      };
+      mkNixWhyOverlay = mkCliScript {
+        name = "nix-why-overlay";
+        desc = "List nixpkgs overlays applied to a flake target";
+        # Overlay tool uses its own Nix expressions, no nix-why library
+        # involvement.
+        needsLib = false;
+      };
     in
     {
       # The strategic asset: pure Nix introspection library. System-
@@ -62,6 +96,9 @@
 
       packages = eachSystem (system: rec {
         nix-why-option = mkNixWhyOption (pkgsFor system);
+        nix-why-conflict = mkNixWhyConflict (pkgsFor system);
+        nix-why-recursion = mkNixWhyRecursion (pkgsFor system);
+        nix-why-overlay = mkNixWhyOverlay (pkgsFor system);
         default = nix-why-option;
       });
 
@@ -72,6 +109,30 @@
           meta = {
             description = "Module-system option resolution debugger";
             mainProgram = "nix-why-option";
+          };
+        };
+        conflict = {
+          type = "app";
+          program = "${self.packages.${system}.nix-why-conflict}/bin/nix-why-conflict";
+          meta = {
+            description = "Focused view on merge conflicts for a single option";
+            mainProgram = "nix-why-conflict";
+          };
+        };
+        recursion = {
+          type = "app";
+          program = "${self.packages.${system}.nix-why-recursion}/bin/nix-why-recursion";
+          meta = {
+            description = "Surface infinite-recursion cycles in --show-trace output";
+            mainProgram = "nix-why-recursion";
+          };
+        };
+        overlay = {
+          type = "app";
+          program = "${self.packages.${system}.nix-why-overlay}/bin/nix-why-overlay";
+          meta = {
+            description = "List nixpkgs overlays applied to a flake target";
+            mainProgram = "nix-why-overlay";
           };
         };
         default = self.apps.${system}.option;
@@ -103,12 +164,12 @@
               }";
 
           # CLI-surface bats tests; no Nix evaluation required at test
-          # runtime (all tests in cli.bats cover argv / help / error
-          # paths that do not invoke `nix eval`).
+          # runtime (all tests cover argv / help / error paths that do
+          # not invoke `nix eval`).
           #
           # We copy the whole flake source into the build dir so the
-          # bats test file can resolve REPO_ROOT relative to itself
-          # (it needs cli/nix-why-option and lib/ to be adjacent).
+          # bats test files can resolve REPO_ROOT relative to themselves
+          # (they need cli/nix-why-* and lib/ to be adjacent).
           cli-tests =
             pkgs.runCommand "nix-why-cli-tests"
               {
@@ -125,16 +186,18 @@
                 cd ./repo
 
                 # /usr/bin/env does not exist in the Nix sandbox, so
-                # the script's `#!/usr/bin/env bash` shebang fails with
+                # the scripts' `#!/usr/bin/env bash` shebangs fail with
                 # "bad interpreter". patchShebangs (from stdenv) rewrites
-                # it to the absolute store path of bash. The packaged
-                # binary gets this automatically via wrapProgram; the
+                # them to the absolute store path of bash. Packaged
+                # binaries get this automatically via wrapProgram; the
                 # raw-source-copy form in this runCommand needs it
                 # applied explicitly.
-                chmod +x cli/nix-why-option
-                patchShebangs cli/nix-why-option
+                chmod +x cli/nix-why-option cli/nix-why-conflict \
+                         cli/nix-why-recursion cli/nix-why-overlay
+                patchShebangs cli/nix-why-option cli/nix-why-conflict \
+                              cli/nix-why-recursion cli/nix-why-overlay
 
-                ${pkgs.bats}/bin/bats tests/cli.bats
+                ${pkgs.bats}/bin/bats tests/cli.bats tests/siblings.bats
                 touch $out
               '';
         }

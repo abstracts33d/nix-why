@@ -115,12 +115,32 @@
                 buildInputs = [
                   pkgs.bats
                   pkgs.jq
+                  pkgs.bash
+                  pkgs.coreutils
                 ];
               }
               ''
                 cp -r ${./.} ./repo
                 chmod -R u+w ./repo
                 cd ./repo
+
+                # Make sure the CLI script is executable - cp from
+                # /nix/store sometimes drops mode bits depending on the
+                # source tree origin.
+                chmod +x cli/nix-why-option
+
+                # Diagnostic: surface the state of the script + lib
+                # before bats runs, so any failure points at the real
+                # cause.
+                echo "=== diagnostics ==="
+                pwd
+                ls -la cli/nix-why-option
+                head -1 cli/nix-why-option
+                ls -la lib/default.nix
+                echo "PATH=$PATH"
+                echo "=== run cli --help directly ==="
+                ./cli/nix-why-option --help || echo "(direct --help exit: $?)"
+                echo "=== bats ==="
                 ${pkgs.bats}/bin/bats tests/cli.bats
                 touch $out
               '';

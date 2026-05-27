@@ -14,6 +14,7 @@ set -euo pipefail
 self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${NIX_WHY_LIB:=${self_dir}/../lib}"
 : "${NIX_WHY_CLI_EXPR_DIR:=${self_dir}/expr}"
+: "${NIX_WHY_CLI_SH:=${self_dir}/_lib.sh}"
 
 if [[ ! -f "${NIX_WHY_LIB}/default.nix" ]]; then
   echo "nix-why-conflict: NIX_WHY_LIB does not point at a valid library directory: ${NIX_WHY_LIB}" >&2
@@ -23,6 +24,12 @@ if [[ ! -f "${NIX_WHY_CLI_EXPR_DIR}/conflict.nix" ]]; then
   echo "nix-why-conflict: NIX_WHY_CLI_EXPR_DIR does not point at a valid driver-expression directory: ${NIX_WHY_CLI_EXPR_DIR}" >&2
   exit 64
 fi
+if [[ ! -f "${NIX_WHY_CLI_SH}" ]]; then
+  echo "nix-why-conflict: NIX_WHY_CLI_SH does not point at the shared lib: ${NIX_WHY_CLI_SH}" >&2
+  exit 64
+fi
+# shellcheck source=./_lib.sh
+source "${NIX_WHY_CLI_SH}"
 
 print_usage() {
   cat << 'EOF'
@@ -102,38 +109,10 @@ if (("${#positional[@]}" != 2)); then
   exit 64
 fi
 
-flake_target="${positional[0]}"
+split_flake_target "${positional[0]}"
 option_path="${positional[1]}"
 
-if [[ "$flake_target" == *"#"* ]]; then
-  flake_ref="${flake_target%%#*}"
-  attr_expr="${flake_target#*#}"
-else
-  flake_ref="$flake_target"
-  attr_expr=""
-fi
-[[ -z "$flake_ref" ]] && flake_ref="."
-case "$flake_ref" in
-  github:* | gitlab:* | sourcehut:* | git+* | http://* | https://* | path:* | flake:*) ;;
-  /*) ;;
-  *) flake_ref="$(realpath -m -- "$flake_ref")" ;;
-esac
-
-if ((no_color)); then
-  C_RESET=""
-  C_BOLD=""
-  C_DIM=""
-  C_GREEN=""
-  C_RED=""
-  C_CYAN=""
-else
-  C_RESET=$'\033[0m'
-  C_BOLD=$'\033[1m'
-  C_DIM=$'\033[2m'
-  C_GREEN=$'\033[32m'
-  C_RED=$'\033[31m'
-  C_CYAN=$'\033[36m'
-fi
+nix_why_init_colors
 
 nix_eval_args=(
   --eval --strict --json --impure

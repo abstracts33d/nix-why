@@ -22,6 +22,7 @@ set -euo pipefail
 self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${NIX_WHY_LIB:=${self_dir}/../lib}"
 : "${NIX_WHY_CLI_EXPR_DIR:=${self_dir}/expr}"
+: "${NIX_WHY_CLI_SH:=${self_dir}/_lib.sh}"
 
 if [[ ! -f "${NIX_WHY_LIB}/default.nix" ]]; then
   echo "nix-why-option: NIX_WHY_LIB does not point at a valid library directory: ${NIX_WHY_LIB}" >&2
@@ -32,6 +33,13 @@ if [[ ! -f "${NIX_WHY_CLI_EXPR_DIR}/resolve.nix" ]]; then
   echo "nix-why-option: NIX_WHY_CLI_EXPR_DIR does not point at a valid driver-expression directory: ${NIX_WHY_CLI_EXPR_DIR}" >&2
   exit 64
 fi
+
+if [[ ! -f "${NIX_WHY_CLI_SH}" ]]; then
+  echo "nix-why-option: NIX_WHY_CLI_SH does not point at the shared lib: ${NIX_WHY_CLI_SH}" >&2
+  exit 64
+fi
+# shellcheck source=./_lib.sh
+source "${NIX_WHY_CLI_SH}"
 
 # ---------------------------------------------------------------------------
 # Argv parsing
@@ -219,26 +227,7 @@ if [[ "$subcommand" == "eval" ]]; then
   )
 
 else
-  flake_target="${positional[0]}"
-
-  # Split <flake-ref>#<attr-path>. If no '#', treat the whole thing
-  # as a flake ref.
-  if [[ "$flake_target" == *"#"* ]]; then
-    flake_ref="${flake_target%%#*}"
-    attr_expr="${flake_target#*#}"
-  else
-    flake_ref="$flake_target"
-    attr_expr=""
-  fi
-
-  [[ -z "$flake_ref" ]] && flake_ref="."
-
-  # builtins.getFlake requires an absolute path or registry URL.
-  case "$flake_ref" in
-    github:* | gitlab:* | sourcehut:* | git+* | http://* | https://* | path:* | flake:*) ;;
-    /*) ;;
-    *) flake_ref="$(realpath -m -- "$flake_ref")" ;;
-  esac
+  split_flake_target "${positional[0]}"
 
   nix_eval_args=(
     --eval --strict --json --impure
@@ -319,25 +308,6 @@ fi
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-plural_s() {
-  # "s" suffix helper: empty for count==1, "s" otherwise. Bash's
-  # arithmetic ternary `((... ? a : b))` is integer-only, so a string
-  # ternary inside $((...)) silently fails with "expression expected".
-  if [ "$1" -eq 1 ] 2> /dev/null; then printf ''; else printf 's'; fi
-}
-
-# Strip the /nix/store/<hash>-<name>/ prefix off a path so the output
-# shows just the in-source-tree portion. Falls through for paths that
-# do not look like store paths.
-strip_store_prefix() {
-  local p="$1"
-  if [[ "$p" =~ ^/nix/store/[^/]+/(.+)$ ]]; then
-    printf '%s' "${BASH_REMATCH[1]}"
-  else
-    printf '%s' "$p"
-  fi
-}
-
 # Pretty-print a definition's priorityKind: prefers the AST-provided
 # label (from module-walk), falls back to deriving from the numeric
 # priority when module-walk was unavailable.
@@ -386,18 +356,7 @@ render_value() {
 
 # ANSI color helpers. Bind to empty strings when colors are disabled so
 # the call sites stay clean.
-if ((no_color)); then
-  C_RESET=""; C_BOLD=""; C_DIM=""
-  C_GREEN=""; C_YELLOW=""; C_CYAN=""; C_RED=""
-else
-  C_RESET=$'\033[0m'
-  C_BOLD=$'\033[1m'
-  C_DIM=$'\033[2m'
-  C_GREEN=$'\033[32m'
-  C_YELLOW=$'\033[33m'
-  C_CYAN=$'\033[36m'
-  C_RED=$'\033[31m'
-fi
+nix_why_init_colors
 
 # ---------------------------------------------------------------------------
 # Tree renderer

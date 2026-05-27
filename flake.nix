@@ -51,10 +51,12 @@
             mkdir -p $out/bin $out/share/nix-why
             ${nixpkgs.lib.optionalString needsLib "cp -r lib $out/share/nix-why/lib"}
             ${nixpkgs.lib.optionalString needsExpr "cp -r cli/expr $out/share/nix-why/cli-expr"}
+            ${nixpkgs.lib.optionalString needsExpr "install -Dm644 cli/_lib.sh $out/share/nix-why/_lib.sh"}
             install -Dm755 cli/${name} $out/bin/${name}
             wrapProgram $out/bin/${name} \
               ${nixpkgs.lib.optionalString needsLib "--set NIX_WHY_LIB $out/share/nix-why/lib"} \
               ${nixpkgs.lib.optionalString needsExpr "--set NIX_WHY_CLI_EXPR_DIR $out/share/nix-why/cli-expr"} \
+              ${nixpkgs.lib.optionalString needsExpr "--set NIX_WHY_CLI_SH $out/share/nix-why/_lib.sh"} \
               --prefix PATH : ${
                 nixpkgs.lib.makeBinPath (
                   [
@@ -207,14 +209,16 @@
                 patchShebangs cli/nix-why-option cli/nix-why-conflict \
                               cli/nix-why-recursion cli/nix-why-overlay
 
-                # The CLIs read NIX_WHY_LIB and NIX_WHY_CLI_EXPR_DIR
-                # to locate the Nix library and the .nix driver
-                # expressions. Bats tests cover argv / help / error
-                # paths that do not actually run `nix eval`, so the
-                # values do not need to point at valid trees - just
-                # set them so the startup validation does not trip.
+                # The CLIs read NIX_WHY_LIB, NIX_WHY_CLI_EXPR_DIR and
+                # NIX_WHY_CLI_SH to locate the Nix library, the .nix
+                # driver expressions and the shared bash helpers.
+                # Bats tests cover argv / help / error paths that do
+                # not actually run `nix eval`, so the values do not
+                # need to point at valid trees - just set them so the
+                # startup validation does not trip.
                 export NIX_WHY_LIB="$PWD/lib"
                 export NIX_WHY_CLI_EXPR_DIR="$PWD/cli/expr"
+                export NIX_WHY_CLI_SH="$PWD/cli/_lib.sh"
 
                 ${pkgs.bats}/bin/bats tests/cli.bats tests/siblings.bats
                 touch $out

@@ -21,7 +21,6 @@ let
       eval = lib.evalModules { modules = fixture.modules ++ [ permissive ]; };
       ast = nixWhy.resolve {
         inherit (fixture) modules;
-        inherit (eval) config;
         inherit (eval) options;
         inherit (fixture) path;
       };
@@ -122,7 +121,6 @@ let
           let
             ast = nixWhy.whatSets {
               modules = simpleModules;
-              inherit (simpleEval) config;
               inherit (simpleEval) options;
               path = "foo.enable";
             };

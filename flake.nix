@@ -131,7 +131,7 @@
             bats
             shellcheck
             shfmt
-            nixfmt-rfc-style
+            nixfmt
             statix
             deadnix
             jq

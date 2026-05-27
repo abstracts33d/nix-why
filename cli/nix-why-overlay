@@ -219,11 +219,17 @@ else
       then lib.foldl (acc: ov: acc ++ [ ((lib.last acc).extend ov) ]) [ baselinePkgs ] overlays
       else [ ];
 
+    # tryRead :: any -> tryEval result   (helper)
+    tryRead = expr: builtins.tryEval expr;
+
     # Compute a comparable signature for the attribute at one pkgs step.
+    # For derivations we also capture a handful of comparable fields so
+    # the diff can surface which fields changed when an overlay
+    # modifies an existing derivation.
     sigOf =
       pkgsInst:
       let
-        tried = builtins.tryEval (lib.attrByPath pathParts null pkgsInst);
+        tried = tryRead (lib.attrByPath pathParts null pkgsInst);
       in
       if !tried.success then
         { kind = "eval-error"; }
@@ -232,15 +238,29 @@ else
       else
         let
           v = tried.value;
-          drvTried = builtins.tryEval (v.drvPath or null);
-          namesTried = builtins.tryEval (if builtins.isAttrs v then builtins.attrNames v else [ ]);
-          strTried = builtins.tryEval (
+          drvTried = tryRead (v.drvPath or null);
+          namesTried = tryRead (if builtins.isAttrs v then builtins.attrNames v else [ ]);
+          strTried = tryRead (
             if builtins.isFunction v then "<function>"
             else builtins.toString v
           );
+          # For derivations: capture comparable fields so per-field diff
+          # works downstream. Each field is wrapped in tryEval - an
+          # overlay can produce a derivation without `version` etc.
+          drvField = name: let t = tryRead (v.${name} or null); in if t.success then t.value else null;
         in
         if builtins.isAttrs v && drvTried.success && drvTried.value != null then
-          { kind = "derivation"; drvPath = drvTried.value; }
+          {
+            kind = "derivation";
+            drvPath = drvTried.value;
+            fields = {
+              name = drvField "name";
+              version = drvField "version";
+              pname = drvField "pname";
+              outputName = drvField "outputName";
+              system = drvField "system";
+            };
+          }
         else if builtins.isAttrs v then
           { kind = "attrset"; attrNames = if namesTried.success then namesTried.value else [ ]; }
         else if builtins.isFunction v then
@@ -251,6 +271,23 @@ else
           { kind = builtins.typeOf v; value = if strTried.success then strTried.value else "(unprintable)"; };
 
     signatures = map sigOf cumulatives;
+
+    # When two derivation signatures differ, identify which captured
+    # fields changed (name/version/pname/outputName/system). Falls back
+    # to ["drvPath"] when fields are equal but drvPath differs (some
+    # internal attr or src changed).
+    changedFields =
+      prev: curr:
+      if prev.kind != "derivation" || curr.kind != "derivation" then
+        [ ]
+      else
+        let
+          fieldNames = [ "name" "version" "pname" "outputName" "system" ];
+          diff = builtins.filter (fn: (prev.fields.${fn} or null) != (curr.fields.${fn} or null)) fieldNames;
+        in
+        if diff != [ ] then diff
+        else if prev.drvPath != curr.drvPath then [ "drvPath" ]
+        else [ ];
 
     # One diff per overlay: comparing signatures[i] to signatures[i+1].
     diffOf =
@@ -272,8 +309,8 @@ else
         kind = kind;
         prevKind = prev.kind;
         currKind = curr.kind;
-        prevSummary = builtins.toJSON prev;
-        currSummary = builtins.toJSON curr;
+        # changedFields is populated only for "modified" derivations.
+        changedFields = if kind == "modified" then changedFields prev curr else [ ];
       };
 
     diffs =
@@ -292,13 +329,14 @@ else
               firstChange = lib.findFirst (d: d.kind == "introduced") null diffs;
             in
             if baseline.kind != "missing" then "baseline"
-            else if firstChange != null then "overlay ${toString firstChange.overlayIndex}"
+            else if firstChange != null then builtins.elemAt overlayNames firstChange.overlayIndex
             else "never";
           lastModification =
             let
               last = lib.findFirst (d: true) null (lib.reverseList changeDiffs);
             in
-            if last == null then "none" else "overlay ${toString last.overlayIndex} (${last.kind})";
+            if last == null then "none"
+            else "${builtins.elemAt overlayNames last.overlayIndex} (${last.kind})";
         in
         {
           inherit firstAppearance lastModification;
@@ -306,13 +344,37 @@ else
           finalKind = (lib.last signatures).kind;
         };
 
-    # Listing mode (no attrPath given): keep the v0.4 MVP behaviour.
+    # Synthetic per-overlay name. Pure-Nix has no access to the source
+    # binding that produced each overlay function value, so we derive
+    # a human-readable name from the FIRST FEW top-level attributes the
+    # overlay contributes when applied. Falls back to "overlay <idx>"
+    # when the overlay fails to evaluate or contributes nothing.
+    synthName =
+      idx: overlay:
+      let
+        applied = tryRead (overlay pkgs pkgs);
+        names =
+          if applied.success && builtins.isAttrs applied.value
+          then builtins.attrNames applied.value
+          else [ ];
+        sample = lib.take 2 names;
+        suffix = if builtins.length names > 2 then ", ..." else "";
+      in
+      if names == [ ] then
+        "overlay ${toString idx}"
+      else
+        "overlay ${toString idx} (${lib.concatStringsSep ", " sample}${suffix})";
+
+    overlayNames = lib.imap0 synthName overlays;
+
+    # Listing mode (no attrPath given): keep the v0.4 MVP behaviour but
+    # include the synthetic name per overlay.
     listingOverlays =
       let
         describe =
           idx: overlay:
           let
-            applied = builtins.tryEval (overlay pkgs pkgs);
+            applied = tryRead (overlay pkgs pkgs);
             names =
               if applied.success && builtins.isAttrs applied.value
               then builtins.attrNames applied.value
@@ -320,6 +382,7 @@ else
           in
           {
             index = idx;
+            name = builtins.elemAt overlayNames idx;
             appliedOk = applied.success;
             attributeCount = builtins.length names;
             attributes = names;
@@ -345,6 +408,7 @@ else
       error = null;
       path = attrPath;
       overlayCount = builtins.length overlays;
+      overlayNames = overlayNames;
       signatures = signatures;
       diffs = diffs;
       inherit summary;
@@ -404,10 +468,10 @@ if [[ "$mode" == "listing" ]]; then
   fi
 
   while IFS= read -r overlay; do
-    idx=$(jq -r '.index' <<< "$overlay")
+    name=$(jq -r '.name' <<< "$overlay")
     ok=$(jq -r '.appliedOk' <<< "$overlay")
     count=$(jq -r '.attributeCount' <<< "$overlay")
-    printf '  %boverlay %d%b' "$C_CYAN" "$idx" "$C_RESET"
+    printf '  %b%s%b' "$C_CYAN" "$name" "$C_RESET"
     if [[ "$ok" == "false" ]]; then
       printf ' %b(evaluation failed; cannot enumerate attributes)%b\n' "$C_YELLOW" "$C_RESET"
       continue
@@ -463,6 +527,7 @@ idx=0
 while IFS= read -r diff; do
   kind=$(jq -r '.kind' <<< "$diff")
   curr_sig=$(jq -c ".signatures[$((idx + 1))]" <<< "$ast_json")
+  overlay_name=$(jq -r ".overlayNames[$idx]" <<< "$ast_json")
   case "$kind" in
     introduced)
       marker="+"
@@ -481,7 +546,14 @@ while IFS= read -r diff; do
       color="$C_DIM"
       ;;
   esac
-  printf '  %s %boverlay %-2d %-12s%b  %s\n' "$marker" "$color" "$idx" "$kind" "$C_RESET" "$(format_sig "$curr_sig")"
+  printf '  %s %b%-40s %-12s%b  %s\n' "$marker" "$color" "$overlay_name" "$kind" "$C_RESET" "$(format_sig "$curr_sig")"
+  # Per-field changes when a derivation was modified
+  if [[ "$kind" == "modified" ]]; then
+    changed_fields=$(jq -r '.changedFields | join(", ")' <<< "$diff")
+    if [[ -n "$changed_fields" && "$changed_fields" != "null" ]]; then
+      printf '       %bchanged fields:%b %s\n' "$C_DIM" "$C_RESET" "$changed_fields"
+    fi
+  fi
   idx=$((idx + 1))
 done < <(jq -c '.diffs[]' <<< "$ast_json")
 

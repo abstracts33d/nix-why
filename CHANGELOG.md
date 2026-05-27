@@ -6,6 +6,45 @@ uses semantic versioning.
 
 ## Unreleased
 
+### Post-v0.5 polish
+
+Three deferred items from the original brainstorm are now shipped:
+
+- **Function-module application** (lib): `from-modules.nix` no longer
+  skips function modules. It reads `config._module.args` from the
+  evaluated configuration (via the new `config` parameter on
+  `resolve` / `whatSets`) and re-applies each function module with
+  those args. Falls back to filtering args by `functionArgs` when
+  the function rejects extras. This is the biggest single capability
+  improvement since v0.1 - real NixOS modules (the vast majority of
+  which are function-form) now contribute to the module-walk pass
+  instead of silently falling back to options-surface fidelity.
+  New fixture `tests/fixtures/function-module.nix` covers the path.
+
+- **Overlay names** (nix-why-overlay): both listing and attribution
+  modes now derive a synthetic display name per overlay from the
+  first two top-level attributes it contributes - e.g.
+  `overlay 0 (firefox, chromium, ...)` instead of bare `overlay 0`.
+  Falls back to `overlay N` for overlays that contribute nothing or
+  fail to evaluate.
+
+- **Per-field derivation diff** (nix-why-overlay): when attribution
+  reports a "modified" derivation, the diff now records which
+  captured fields changed (`name`, `version`, `pname`,
+  `outputName`, `system`, or `drvPath` for catch-all changes). The
+  tree renderer prints them on a `changed fields:` line under the
+  modified overlay's entry.
+
+Documented in docs/roadmap/v0.5-overlay-attribution.md (Limitations
+section).
+
+Submodule traversal (sub-options behind `lib.types.submodule`) was
+also on the deferred list but remains deferred: getSubOptions
+returns pre-eval declarations while definitions live in a separate
+evaluation channel; reaching them properly requires a significant
+restructure of from-options. Documented inline in the
+`nested-submodule` fixture.
+
 ### v0.5 - overlay attribution
 
 `nix-why-overlay` gains a second invocation form that does what the

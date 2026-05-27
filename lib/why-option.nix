@@ -80,20 +80,72 @@ let
   isFilteredByMkIf = def: def.guardedBy != null && def.guardedBy.evaluatedTo == false;
 in
 rec {
-  # resolve :: { modules, config ? {}, options, path } -> AST
-  #
-  # Composes the options-surface and module-walk introspection passes.
-  # The options-surface pass provides the canonical merge result
-  # (final value, declarations, winning priority); the module-walk pass
-  # enriches each definition with line numbers, priority kind, and
-  # mkIf-guard records. When module-walk is unavailable, the output
-  # degrades gracefully to options-surface fidelity.
-  #
-  # `modules` is optional; pass [] (or omit) when the adapter could not
-  # recover the raw modules list - the merge step then falls back to
-  # options-surface fidelity. `config` is the evaluated config from
-  # lib.evalModules; from-modules reads its _module.args to apply
-  # function modules accurately.
+  /**
+    Resolve a single option path against an evaluated module-system
+    configuration. Returns the final value plus every contributing
+    definition, with file:line, priority kind, and `mkIf` guards.
+
+    Composes two introspection passes:
+
+    - **options-surface** (always available): canonical merge result
+      from the evaluated `options` tree — final value, declarations,
+      winning priority.
+    - **module-walk** (opt-in): re-walks the raw modules list to
+      attach per-definition line numbers, priority kind labels, and
+      `mkIf`-guard records. Requires `_module.args.modules` to be
+      set in the configuration (see adapters' module-recovery
+      contract).
+
+    When module-walk is unavailable, the output degrades gracefully
+    to options-surface fidelity (no per-definition line numbers, no
+    guard records). `moduleWalkAvailable` in the result indicates
+    which mode was used.
+
+    # Inputs
+
+    `modules`
+    : Raw modules list. Optional; pass `[]` (or omit) when the
+      adapter could not recover it. The merge step then falls back
+      to options-surface fidelity.
+
+    `config`
+    : Evaluated config from `lib.evalModules`. `from-modules` reads
+      its `_module.args` to apply function-shaped modules
+      accurately.
+
+    `options`
+    : Evaluated options tree from `lib.evalModules`.
+
+    `path`
+    : Dotted option path, e.g. `"services.openssh.enable"`.
+
+    # Type
+
+    ```
+    resolve :: {
+      modules ? [Module],
+      config ? AttrSet,
+      options :: AttrSet,
+      path :: String,
+    } -> AST
+    ```
+
+    Where `AST` is the shape documented at
+    [`docs/reference/json-schema.md`](../docs/reference/json-schema.md)
+    under the `nix-why-option` (resolve) section.
+
+    # Example
+
+    ```nix
+    nixWhy.resolve {
+      inherit (adapted) modules config options;
+      path = "services.openssh.enable";
+    }
+    # => { path = "services.openssh.enable"; kind = "option";
+    #      value = true; winningPriority = 100; isDefined = true;
+    #      definitions = [ … ]; conflicts = []; … }
+    ```
+  */
   resolve =
     {
       modules ? [ ],
@@ -161,19 +213,43 @@ rec {
       moduleWalkAvailable = moduleWalk.definitions != [ ];
     };
 
-  # whatSets :: { modules, config ? {}, options, path } -> AST
-  #
-  # v0.3 reverse-lookup. Returns the same shape as resolve but oriented
-  # around "every module that contains a definition for this option,
-  # regardless of whether it won, was overridden, or was filtered out by
-  # mkIf". The output AST is a subset of resolve's:
-  #
-  #   { path, kind, type, isDefined, declarations, setters }
-  #
-  # where `setters` is the deduplicated list of definitions across all
-  # contributing modules. The renderer treats this differently from
-  # resolve's `definitions`: no "winning" marker, no value, just file +
-  # line + priorityKind + guardedBy per setter.
+  /**
+    Reverse-lookup for an option path: list every module that
+    contributes a definition, regardless of whether it won the
+    merge, was overridden, or was filtered out by `mkIf`.
+
+    Useful for "where on earth is this being set?" questions, where
+    `resolve`'s winner-centric view hides the losers. The renderer
+    treats `setters` differently from `resolve.definitions`: no
+    winning marker, no merged value, just per-setter file + line +
+    priorityKind + guardedBy.
+
+    # Inputs
+
+    Same as [`resolve`](#resolve).
+
+    # Type
+
+    ```
+    whatSets :: {
+      modules ? [Module],
+      config ? AttrSet,
+      options :: AttrSet,
+      path :: String,
+    } -> {
+      path :: String,
+      kind :: "option" | "not-found" | "not-an-option",
+      type :: String,
+      isDefined :: Bool,
+      declarations :: [{ file, line, column }],
+      setters :: [Setter],
+      moduleWalkAvailable :: Bool,
+    }
+    ```
+
+    Where `Setter` is `{ file, line, priority, priorityKind,
+    guardedBy, value }`.
+  */
   whatSets =
     {
       modules ? [ ],
@@ -236,31 +312,50 @@ rec {
       moduleWalkAvailable = moduleWalk.definitions != [ ];
     };
 
-  # whyNot :: { modules, options, path } -> AST
-  #
-  # v0.4 "why is this option not explicitly set?".
-  #
-  # NixOS treats an option's declared `default` as a definition at
-  # priority 1500 (mkOptionDefault), so a plain `resolve` reports
-  # isDefined=true even when no module touched the option. whyNot
-  # filters that out: it considers only definitions with priority
-  # other than 1500 as user-supplied, and surfaces any
-  # mkIf-filtered definitions that would have set the option had
-  # their guards held.
-  #
-  # Output AST:
-  #   path, kind, type, value, declarations  - same as resolve
-  #   isExplicitlySet :: bool
-  #     true iff there is at least one user-supplied definition
-  #     (priority != 1500), independent of whether it won the merge
-  #   explicitDefinitions :: list of definitions with priority != 1500
-  #   defaultDefinitions  :: list of definitions with priority == 1500
-  #   filteredOutDefinitions :: list of definitions with
-  #     guardedBy.evaluatedTo == false (i.e. mkIf gated them out)
-  #   hint :: string | null
-  #     when isExplicitlySet is false and there are filtered-out defs,
-  #     a short suggestion listing them
-  #   moduleWalkAvailable :: bool
+  /**
+    Explain why an option is *not* explicitly set, and what would
+    set it under different conditions.
+
+    NixOS treats an option's declared `default` as a definition at
+    priority `1500` (`mkOptionDefault`), so a plain `resolve`
+    reports `isDefined = true` even when no module touched the
+    option. `whyNot` filters that out: only definitions with
+    priority `≠ 1500` count as user-supplied. It additionally
+    surfaces `mkIf`-filtered definitions that *would* have set the
+    option if their guards had held.
+
+    Typical user question this answers:
+
+    > "I set `services.foo.enable = true` but `services.foo.port`
+    > comes out as the default. Why?"
+
+    `whyNot services.foo.port` will list the mkIf-gated definitions
+    of `services.foo.port` and the condition they require.
+
+    # Inputs
+
+    Same as [`resolve`](#resolve). `modules` is strongly recommended
+    here (without module-walk, `filteredOutDefinitions` is always
+    empty since `mkIf` guards live in the module source, not the
+    options surface).
+
+    # Type
+
+    ```
+    whyNot :: { modules, config, options, path } -> {
+      path, kind, type, value, declarations, moduleWalkAvailable,
+      isExplicitlySet :: Bool,
+      explicitDefinitions :: [Def],
+      defaultDefinitions  :: [Def],
+      filteredOutDefinitions :: [Def],
+      hint :: String | null,
+    }
+    ```
+
+    `isExplicitlySet` is true iff `explicitDefinitions` is non-
+    empty, *independent* of whether any of those definitions won
+    the merge.
+  */
   whyNot =
     args:
     let
@@ -311,20 +406,55 @@ rec {
         ;
     };
 
-  # search :: { options, pattern, limit ? 50 } -> { pattern, matches, truncated, totalMatches }
-  #
-  # v0.3 discovery. Walks the options tree depth-first collecting all
-  # leaf option paths (`_type == "option"`), then filters by infix
-  # pattern match against the dotted path. Used by `nix-why-option
-  # search` to find the right option name from a fuzzy symptom.
-  #
-  # When a leaf option's type is `submodule`, the search also descends
-  # into the submodule's declared sub-options via `getSubOptions []`.
-  # `attrsOf submodule` sub-options are exposed under the key
-  # placeholder `"<name>"` so they remain searchable.
-  #
-  # Returns at most `limit` matches; `truncated` indicates whether more
-  # were available.
+  /**
+    Fuzzy-match an option-path pattern against the options tree,
+    descending into submodules.
+
+    Walks the options tree depth-first collecting every leaf option
+    (`_type == "option"`), then filters by infix match against the
+    dotted path. For options whose type is `submodule` (or
+    `attrsOf submodule`), the search descends into the submodule's
+    declared sub-options via `getSubOptions []`. `attrsOf submodule`
+    sub-options are exposed under the key placeholder `"<name>"`
+    so they remain searchable.
+
+    Recursion into submodules is bounded by `maxSubmoduleDepth`
+    (default `2`) to keep eval time reasonable on configurations
+    with deeply nested submodule chains (e.g. nixpkgs' `services.*`
+    with `attrsOf submodule of attrsOf submodule of …`).
+
+    # Inputs
+
+    `options`
+    : Evaluated options tree.
+
+    `pattern`
+    : Infix substring to match against each dotted option path.
+
+    `limit`
+    : Maximum matches in the returned `matches` list. `0` disables
+      truncation. Default `50`.
+
+    `maxSubmoduleDepth`
+    : Maximum number of submodule pivots from the root options
+      tree. Default `2`.
+
+    # Type
+
+    ```
+    search :: {
+      options :: AttrSet,
+      pattern :: String,
+      limit ? 50 :: Int,
+      maxSubmoduleDepth ? 2 :: Int,
+    } -> {
+      pattern :: String,
+      matches :: [{ path, type, declarations, isDefined }],
+      totalMatches :: Int,
+      truncated :: Bool,
+    }
+    ```
+  */
   search =
     {
       options,

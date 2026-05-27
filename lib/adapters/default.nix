@@ -1,3 +1,31 @@
+/**
+  Adapter facade: map a flake's evaluated configuration shape onto
+  the nix-why library's uniform `{ modules, specialArgs, config,
+  options }` contract.
+
+  Supported schemas:
+
+  - `nixos`         — `lib.nixosSystem` / `lib.evalModules` with
+                      the NixOS base modules
+  - `home-manager`  — `homeConfigurations."<user>@<host>"`
+  - `nix-darwin`    — `darwinConfigurations.<host>`
+  - `flake-parts`   — `mkFlake` perSystem outputs or any plain
+                      `lib.evalModules` result with `config` +
+                      `options`
+  - `raw`           — a directly-supplied `{ modules, specialArgs? }`
+                      pair (used by `nix-why-option eval`)
+
+  # Module recovery
+
+  None of these schemas expose the raw modules list by default.
+  Consumers opt in by setting `_module.args.modules = <list>` in
+  their configuration; adapters then read it from either
+  `config._module.args.modules` (real configs) or top-level
+  `_module.args.modules` (plain `lib.evalModules` consumers).
+  Without this opt-in, module-walk introspection degrades to
+  options-surface fidelity (no per-definition line numbers / guard
+  records).
+*/
 { lib }:
 let
   nixos = import ./nixos.nix { inherit lib; };
@@ -64,14 +92,33 @@ in
 {
   inherit byName detectAdapter;
 
-  # adapt :: { name ? null, flakeOutput } -> { modules, specialArgs, config, options }
-  #
-  # If `name` is provided, dispatches directly to that adapter (used by
-  # the CLI's --adapter flag). Otherwise runs the detection heuristic
-  # against the flakeOutput shape.
-  #
-  # Throws when no adapter can be selected; the CLI translates this to
-  # exit code 3 (flake target not found or wrong schema).
+  /**
+    Adapt an evaluated flake output to the uniform nix-why
+    contract.
+
+    If `name` is provided, dispatches directly to that adapter
+    (used by the CLI's `--adapter` flag). Otherwise runs the
+    `detectAdapter` heuristic against the `flakeOutput` shape.
+
+    Throws when no adapter can be selected; the CLI translates
+    this to exit code 3 (flake target not found or wrong schema).
+
+    # Type
+
+    ```
+    adapt :: {
+      name ? null :: "nixos" | "home-manager" | "nix-darwin"
+                   | "flake-parts" | "raw" | null,
+      flakeOutput :: AttrSet,
+    } -> {
+      modules :: [Module],       # empty if the adapter could not
+                                 # recover the modules list
+      specialArgs :: AttrSet,    # may be empty for some adapters
+      config :: AttrSet,
+      options :: AttrSet,
+    }
+    ```
+  */
   adapt =
     {
       name ? null,

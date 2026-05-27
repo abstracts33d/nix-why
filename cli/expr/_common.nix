@@ -2,6 +2,16 @@
 # evaluated directly.
 { lib }:
 let
+  # Stable contract version for the JSON outputs emitted by the
+  # nix-why-* CLIs (resolve, what-sets, why-not, search, conflict,
+  # overlay-listing, overlay-attribution, recursion). Bumped on
+  # breaking changes (field removed or semantics changed); additive
+  # changes keep the same version.
+  #
+  # Documented at docs/reference/json-schema.md - read that before
+  # bumping.
+  schemaVersion = "1";
+
   schemas = [
     "nixosConfigurations"
     "darwinConfigurations"
@@ -34,5 +44,5 @@ let
         lib.attrByPath ([ (builtins.head tries) ] ++ parts) (throw "unreachable") flake;
 in
 {
-  inherit schemas resolveAttr;
+  inherit schemaVersion schemas resolveAttr;
 }

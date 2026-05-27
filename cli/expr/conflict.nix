@@ -34,6 +34,7 @@ let
   };
 in
 {
+  inherit (common) schemaVersion;
   inherit (ast)
     path
     kind

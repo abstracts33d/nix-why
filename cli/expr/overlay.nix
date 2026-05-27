@@ -16,6 +16,7 @@
 }:
 let
   inherit ((import <nixpkgs> { })) lib;
+  common = import ./_common.nix { inherit lib; };
   flake = builtins.getFlake flakeRef;
 
   parts = if attr == "" then [ ] else lib.splitString "." attr;
@@ -87,6 +88,7 @@ let
 in
 if discovery == null then
   {
+    inherit (common) schemaVersion;
     error = "could not locate overlays on the target. Tried NixOS/HM/darwin config.nixpkgs, _module.args.pkgs, target.overlays, and target-is-pkgs shapes. Point me at .#nixosConfigurations.<host> or .#legacyPackages.<system>.";
   }
 else
@@ -301,6 +303,7 @@ else
   in
   if pathParts == [ ] then
     {
+      inherit (common) schemaVersion;
       mode = "listing";
       error = null;
       overlayCount = builtins.length overlays;
@@ -308,11 +311,13 @@ else
     }
   else if !canBuildBaseline then
     {
+      inherit (common) schemaVersion;
       mode = "attribution";
       error = "could not locate baseline nixpkgs source (pkgs.path is unset on this target). Attribution requires a baseline to fold overlays against.";
     }
   else
     {
+      inherit (common) schemaVersion;
       mode = "attribution";
       error = null;
       path = attrPath;

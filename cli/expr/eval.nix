@@ -26,6 +26,7 @@
 let
   inherit ((import <nixpkgs> { })) lib;
   nixWhy = import libPath { inherit lib; };
+  common = import ./_common.nix { inherit lib; };
 
   userResult = import userExprFile;
 
@@ -43,25 +44,28 @@ let
         name = if adapterName == "" then null else adapterName;
         flakeOutput = userResult;
       };
+
+  result =
+    if mode == "search" then
+      nixWhy.search {
+        inherit (adapted) options;
+        pattern = searchPattern;
+        limit = lib.toInt searchLimit;
+      }
+    else if mode == "whatSets" then
+      nixWhy.whatSets {
+        inherit (adapted) modules options config;
+        path = optionPath;
+      }
+    else if mode == "whyNot" then
+      nixWhy.whyNot {
+        inherit (adapted) modules options config;
+        path = optionPath;
+      }
+    else
+      nixWhy.resolve {
+        inherit (adapted) modules options config;
+        path = optionPath;
+      };
 in
-if mode == "search" then
-  nixWhy.search {
-    inherit (adapted) options;
-    pattern = searchPattern;
-    limit = lib.toInt searchLimit;
-  }
-else if mode == "whatSets" then
-  nixWhy.whatSets {
-    inherit (adapted) modules options config;
-    path = optionPath;
-  }
-else if mode == "whyNot" then
-  nixWhy.whyNot {
-    inherit (adapted) modules options config;
-    path = optionPath;
-  }
-else
-  nixWhy.resolve {
-    inherit (adapted) modules options config;
-    path = optionPath;
-  }
+{ inherit (common) schemaVersion; } // result

@@ -73,6 +73,7 @@ Flags:
   --limit N           (search only) cap on the number of matches
                       shown; 0 disables truncation (default 50)
   -h, --help          Show this help
+  --version           Show the nix-why version
 
 Exit codes:
   0   option resolved
@@ -131,6 +132,10 @@ while (($# > 0)); do
       ;;
     -h | --help)
       print_usage
+      exit 0
+      ;;
+    --version)
+      nix_why_print_version nix-why-option
       exit 0
       ;;
     --)
@@ -259,20 +264,24 @@ nix_rc=0
 }
 
 if ((nix_rc != 0)); then
-  # Map well-known internal throws to specific exit codes. Anything else
-  # is treated as a generic evaluation error (exit 4).
+  # Classify the error. Map well-known patterns to specific exit
+  # codes; everything else is a generic evaluation error (exit 4).
+  # Schema/flake-target errors get exit 3; path-not-found gets exit 3
+  # too since it is a "flake target not reachable" failure mode.
   case "$nix_stderr" in
     *"nix-why: '"*"' did not match any of "* | \
       *"nix-why: '"*"' is ambiguous"* | \
       *"nix-why: attribute path '"*"' not found"* | \
       *"nix-why: no attribute path given after"* | \
       *"nix-why: could not detect adapter"* | \
-      *"nix-why: unknown adapter"*)
-      echo "$nix_stderr" >&2
+      *"nix-why: unknown adapter"* | \
+      *"error: path '"*"' does not exist"* | \
+      *"error: attribute '"*"' missing"*)
+      nix_why_render_error nix-why-option "$nix_stderr" "$show_trace"
       exit 3
       ;;
     *)
-      echo "$nix_stderr" >&2
+      nix_why_render_error nix-why-option "$nix_stderr" "$show_trace"
       exit 4
       ;;
   esac

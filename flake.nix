@@ -18,6 +18,11 @@
       treefmt-nix,
     }:
     let
+      # Single source of truth for the package version. Bump this when
+      # cutting a release; both the derivation version and the runtime
+      # --version output read from here.
+      nixWhyVersion = "0.5.0-pre";
+
       eachSystem = nixpkgs.lib.genAttrs (import systems);
       pkgsFor = system: nixpkgs.legacyPackages.${system};
       treefmtEval = eachSystem (system: treefmt-nix.lib.evalModule (pkgsFor system) ./treefmt.nix);
@@ -41,7 +46,7 @@
         pkgs:
         pkgs.stdenv.mkDerivation {
           pname = name;
-          version = "0.5.0-pre";
+          version = nixWhyVersion;
           src = ./.;
           nativeBuildInputs = [ pkgs.makeWrapper ];
           dontConfigure = true;
@@ -51,12 +56,13 @@
             mkdir -p $out/bin $out/share/nix-why
             ${nixpkgs.lib.optionalString needsLib "cp -r lib $out/share/nix-why/lib"}
             ${nixpkgs.lib.optionalString needsExpr "cp -r cli/expr $out/share/nix-why/cli-expr"}
-            ${nixpkgs.lib.optionalString needsExpr "install -Dm644 cli/_lib.sh $out/share/nix-why/_lib.sh"}
+            install -Dm644 cli/_lib.sh $out/share/nix-why/_lib.sh
             install -Dm755 cli/${name} $out/bin/${name}
             wrapProgram $out/bin/${name} \
+              --set NIX_WHY_VERSION ${nixWhyVersion} \
+              --set NIX_WHY_CLI_SH $out/share/nix-why/_lib.sh \
               ${nixpkgs.lib.optionalString needsLib "--set NIX_WHY_LIB $out/share/nix-why/lib"} \
               ${nixpkgs.lib.optionalString needsExpr "--set NIX_WHY_CLI_EXPR_DIR $out/share/nix-why/cli-expr"} \
-              ${nixpkgs.lib.optionalString needsExpr "--set NIX_WHY_CLI_SH $out/share/nix-why/_lib.sh"} \
               --prefix PATH : ${
                 nixpkgs.lib.makeBinPath (
                   [

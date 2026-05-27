@@ -89,3 +89,95 @@ split_flake_target() {
 plural_s() {
   if [ "$1" -eq 1 ] 2> /dev/null; then printf ''; else printf 's'; fi
 }
+
+# Render a one-line actionable error from a captured nix-instantiate
+# stderr blob, suppressing internal-library file paths and stack
+# frames unless --show-trace was requested.
+#
+# Usage:
+#   nix_why_render_error <tool-name> <stderr-blob> <show-trace-flag>
+#
+# When show-trace-flag is 0:
+#   - Extract the most-specific "error: <message>" line (Nix emits the
+#     root cause last in the trace)
+#   - Translate well-known patterns into actionable one-liners:
+#     - "path '<p>' does not exist"   -> "<tool>: flake not found at <p>"
+#     - "attribute '<a>' missing"     -> "<tool>: attribute '<a>' not found in flake"
+#     - "nix-why: <msg>"              -> "<msg>" (our own throws pass through)
+#   - Anything else: prefix with "<tool>: " and emit the bare error line
+#   - The internal stack frames, source previews, and store paths are
+#     dropped on the floor
+#
+# When show-trace-flag is 1:
+#   - The full original stderr is emitted verbatim (Nix already
+#     produced a complete --show-trace dump if requested)
+#
+# Always prints to fd 2. Returns 0 if a known pattern matched, 1 on
+# fallback.
+nix_why_render_error() {
+  local tool="$1"
+  local stderr_blob="$2"
+  local show_trace="${3:-0}"
+
+  if ((show_trace)); then
+    printf '%s\n' "$stderr_blob" >&2
+    return 0
+  fi
+
+  # Nix prints multiple "error:" lines in a trace. The final one is
+  # typically the root cause; the earlier ones are stack-frame chrome.
+  local root_msg
+  root_msg="$(printf '%s\n' "$stderr_blob" |
+    grep -E '^[[:space:]]*error: ' |
+    tail -1 |
+    sed -E 's/^[[:space:]]*error: //')"
+
+  # Nix renders missing paths as `'//path/to/x'` with a leading slash
+  # artifact. Strip it back to the user-supplied form.
+  local matched=0
+  case "$root_msg" in
+    "path '"*"' does not exist")
+      local path_inner="${root_msg#path \'}"
+      path_inner="${path_inner%\' does not exist}"
+      [[ $path_inner == //* ]] && path_inner="${path_inner#/}"
+      printf '%s: flake not found at %s\n' "$tool" "$path_inner" >&2
+      matched=1
+      ;;
+    "attribute '"*"' missing")
+      local attr="${root_msg#attribute \'}"
+      attr="${attr%\' missing}"
+      printf "%s: attribute '%s' not found in flake\n" "$tool" "$attr" >&2
+      matched=1
+      ;;
+    "nix-why: "*)
+      printf '%s\n' "$root_msg" >&2
+      matched=1
+      ;;
+    "nix-why-"*": "*)
+      printf '%s\n' "$root_msg" >&2
+      matched=1
+      ;;
+    "")
+      printf '%s: evaluation failed (re-run with --show-trace for details)\n' "$tool" >&2
+      ;;
+    *)
+      printf '%s: %s (re-run with --show-trace for details)\n' "$tool" "$root_msg" >&2
+      ;;
+  esac
+
+  return $((1 - matched))
+}
+
+# Print "<tool-name> <version>" to stdout.
+#
+# The version is taken from $NIX_WHY_VERSION (set by the package
+# wrapper to the flake's nixWhyVersion). Falls back to "(dev)" for
+# local development runs of the raw script.
+#
+# Callers pass their tool name (e.g. "nix-why-option"). The format
+# matches `nix --version` ("nix (Nix) X.Y.Z") loosely but stays terse
+# enough for scripted parsing.
+nix_why_print_version() {
+  local tool="${1:-nix-why}"
+  printf '%s %s\n' "$tool" "${NIX_WHY_VERSION:-(dev)}"
+}

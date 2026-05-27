@@ -17,6 +17,15 @@
 
 set -euo pipefail
 
+# Source the shared bash helpers (mainly for --version). The recursion
+# tool is otherwise self-contained: pure text parser, no nix eval.
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+: "${NIX_WHY_CLI_SH:=${self_dir}/_lib.sh}"
+if [[ -f "${NIX_WHY_CLI_SH}" ]]; then
+  # shellcheck source=./_lib.sh
+  source "${NIX_WHY_CLI_SH}"
+fi
+
 print_usage() {
   cat << 'EOF'
 nix-why-recursion - surface infinite-recursion cycles in --show-trace output
@@ -30,6 +39,7 @@ Flags:
   --json              Emit JSON: { hasRecursion, lastFrames[], topFrames[] }
   --no-color          Force-disable ANSI escapes (also respects NO_COLOR)
   -h, --help          Show this help
+  --version           Show the nix-why version
 
 Exit codes:
   0   recursion detected, report emitted
@@ -67,6 +77,14 @@ while (($# > 0)); do
       ;;
     -h | --help)
       print_usage
+      exit 0
+      ;;
+    --version)
+      if declare -F nix_why_print_version > /dev/null; then
+        nix_why_print_version nix-why-recursion
+      else
+        printf 'nix-why-recursion %s\n' "${NIX_WHY_VERSION:-(dev)}"
+      fi
       exit 0
       ;;
     -*)
@@ -182,8 +200,14 @@ if [[ "$format" == "json" ]]; then
 
   last_json="$(to_json_array "$last_frames_tsv")"
   top_json="$(to_top_json "$top_frames_tsv")"
-  jq -n --argjson lastFrames "$last_json" --argjson topFrames "$top_json" '
-    { hasRecursion: true, lastFrames: $lastFrames, topFrames: $topFrames }
+  # schemaVersion is kept in sync with cli/expr/_common.nix's
+  # schemaVersion constant. Bump both when introducing a breaking
+  # change to the JSON output. See docs/reference/json-schema.md.
+  jq -n \
+    --arg schemaVersion "1" \
+    --argjson lastFrames "$last_json" \
+    --argjson topFrames "$top_json" '
+    { schemaVersion: $schemaVersion, hasRecursion: true, lastFrames: $lastFrames, topFrames: $topFrames }
   '
   exit 0
 fi

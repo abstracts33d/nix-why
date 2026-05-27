@@ -44,6 +44,7 @@ Flags:
   --show-trace        Pass through to nix eval
   --adapter <name>    Force a specific adapter
   -h, --help          Show this help
+  --version           Show the nix-why version
 
 Exit codes:
   0   option resolved cleanly, no conflicts
@@ -89,6 +90,10 @@ while (($# > 0)); do
       ;;
     -h | --help)
       print_usage
+      exit 0
+      ;;
+    --version)
+      nix_why_print_version nix-why-conflict
       exit 0
       ;;
     -*)
@@ -139,12 +144,14 @@ if ((nix_rc != 0)); then
       *"nix-why: attribute path '"*"' not found"* | \
       *"nix-why: no attribute path given after"* | \
       *"nix-why: could not detect adapter"* | \
-      *"nix-why: unknown adapter"*)
-      echo "$nix_stderr" >&2
+      *"nix-why: unknown adapter"* | \
+      *"error: path '"*"' does not exist"* | \
+      *"error: attribute '"*"' missing"*)
+      nix_why_render_error nix-why-conflict "$nix_stderr" "$show_trace"
       exit 3
       ;;
     *)
-      echo "$nix_stderr" >&2
+      nix_why_render_error nix-why-conflict "$nix_stderr" "$show_trace"
       exit 4
       ;;
   esac

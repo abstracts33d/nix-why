@@ -12,10 +12,17 @@
 
   path = "foo.enable";
 
-  # Option declared but never set by any module. isDefined is false, but
-  # `value` still returns the declared default (the library is permissive
-  # here for ergonomics).
+  # Option declared with a default, never set by user config. NixOS
+  # represents the default itself as a definition at priority 1500
+  # (mkOptionDefault), so:
+  #   isDefined        = true   (the default counts)
+  #   winningPriority  = 1500
+  #   value            = false  (the declared default)
+  #
+  # A future "is this *explicitly* set" view (v0.4 territory) would
+  # filter on priority != 1500 to distinguish user-supplied
+  # definitions from the type default.
   assertions =
     ast:
-    ast.kind == "option" && ast.isDefined == false && (builtins.length ast.definitions) == 0;
+    ast.kind == "option" && ast.value == false && ast.winningPriority == 1500;
 }

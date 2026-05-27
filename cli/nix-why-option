@@ -221,7 +221,7 @@ let
       }
     else
       nixWhy.${library_fn} {
-        inherit (adapted) modules options;
+        inherit (adapted) modules options config;
         path = "${option_path}";
       };
 in
@@ -301,7 +301,7 @@ let
       }
     else
       nixWhy.${library_fn} {
-        inherit (adapted) modules options;
+        inherit (adapted) modules options config;
         path = "${option_path}";
       };
 in

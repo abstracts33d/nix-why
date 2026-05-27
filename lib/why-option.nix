@@ -80,7 +80,7 @@ let
   isFilteredByMkIf = def: def.guardedBy != null && def.guardedBy.evaluatedTo == false;
 in
 rec {
-  # resolve :: { modules, options, path } -> AST
+  # resolve :: { modules, config ? {}, options, path } -> AST
   #
   # Composes the options-surface and module-walk introspection passes.
   # The options-surface pass provides the canonical merge result
@@ -91,12 +91,13 @@ rec {
   #
   # `modules` is optional; pass [] (or omit) when the adapter could not
   # recover the raw modules list - the merge step then falls back to
-  # options-surface fidelity. A future iteration that applies function
-  # modules during the walk will reintroduce specialArgs and config to
-  # this signature.
+  # options-surface fidelity. `config` is the evaluated config from
+  # lib.evalModules; from-modules reads its _module.args to apply
+  # function modules accurately.
   resolve =
     {
       modules ? [ ],
+      config ? { },
       options,
       path,
     }:
@@ -109,7 +110,7 @@ rec {
           { definitions = [ ]; }
         else
           internal.fromModules {
-            inherit modules pathParts;
+            inherit modules pathParts config;
           };
 
       mergedDefinitions =
@@ -153,7 +154,7 @@ rec {
       moduleWalkAvailable = moduleWalk.definitions != [ ];
     };
 
-  # whatSets :: { modules, options, path } -> AST
+  # whatSets :: { modules, config ? {}, options, path } -> AST
   #
   # v0.3 reverse-lookup. Returns the same shape as resolve but oriented
   # around "every module that contains a definition for this option,
@@ -169,6 +170,7 @@ rec {
   whatSets =
     {
       modules ? [ ],
+      config ? { },
       options,
       path,
     }:
@@ -180,7 +182,7 @@ rec {
           { definitions = [ ]; }
         else
           internal.fromModules {
-            inherit modules pathParts;
+            inherit modules pathParts config;
           };
 
       # Union of options-surface winners and module-walk all-defs,

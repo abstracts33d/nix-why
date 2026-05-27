@@ -3,26 +3,51 @@ let
   walker = import ./walker.nix { inherit lib; };
   priority = import ./priority.nix { inherit lib; };
 
+  # Apply a function module with the captured _module.args. Two-step:
+  # 1. Try calling with all captured args (works for `{ a, b, ... }: ...`
+  #    where the function accepts varargs).
+  # 2. If that throws "unexpected argument", filter to only the keys the
+  #    function declares (works for `{ a, b }: ...`).
+  # 3. If even the filtered call throws, give up - that module's
+  #    contributions will not appear in the walk.
+  applyFunctionModule =
+    fn: capturedArgs:
+    let
+      argSpec = builtins.functionArgs fn;
+      fullCall = builtins.tryEval (fn capturedArgs);
+    in
+    if fullCall.success then
+      fullCall.value
+    else
+      let
+        filteredArgs = lib.filterAttrs (n: _: argSpec ? ${n}) capturedArgs;
+        filteredCall = builtins.tryEval (fn filteredArgs);
+      in
+      if filteredCall.success then filteredCall.value else null;
+
   # Normalize a single module entry to { cfg, file } or null when we
-  # cannot safely handle it.
+  # cannot evaluate it.
   #
-  # Function modules require evaluation arguments we may not have; rather
-  # than guessing, we skip them and rely on the upstream adapter to
-  # pre-apply functional modules (or for callers to use the `raw` adapter
-  # with a pre-resolved module list).
+  # Three shapes accepted:
+  #   - Attrset modules: used directly (config sub-attr or top-level).
+  #   - Path modules: imported, then recursed.
+  #   - Function modules: applied with capturedArgs.
   normalizeModule =
-    m:
+    capturedArgs: m:
     if builtins.isPath m then
       let
         imported = import m;
+        normalizedInner = normalizeModule capturedArgs imported;
       in
-      if builtins.isAttrs imported then
-        {
-          cfg = imported.config or imported;
-          file = toString m;
-        }
-      else
+      if normalizedInner == null then
         null
+      else
+        normalizedInner // { file = normalizedInner.file or (toString m); }
+    else if builtins.isFunction m then
+      let
+        applied = applyFunctionModule m capturedArgs;
+      in
+      if applied == null then null else normalizeModule capturedArgs applied
     else if builtins.isAttrs m then
       {
         cfg = m.config or m;
@@ -31,16 +56,8 @@ let
     else
       null;
 
-  # Conditions are collected outer-to-inner during the walk. A definition
-  # "passes" all its mkIf guards iff every condition evaluated true.
   allConditionsHeld = conditions: lib.all (c: c.condition) conditions;
 
-  # Build a definition record from a walker leaf.
-  #
-  # `file` argument is the surrounding module's source file, used as a
-  # fallback when the leaf's own position (from unsafeGetAttrPos) lacks
-  # one - typically the case for compound-attribute paths whose outermost
-  # attribute was already in a synthetic level.
   buildDefinition =
     file: leaf:
     let
@@ -60,9 +77,6 @@ let
           null
         else
           {
-            # The condition's textual source is filled in by the
-            # nix-source extractor downstream in why-option.nix when
-            # the source file is readable.
             source = null;
             evaluatedTo = held;
             count = builtins.length conds;
@@ -71,22 +85,35 @@ let
     };
 in
 {
-  # fromModules :: { modules, specialArgs ? {}, config ? {}, pathParts } -> { definitions }
+  # fromModules :: { modules, config ? {}, pathParts } -> { definitions }
   #
-  # Walks the supplied module list (post-normalization) and returns the
-  # complete list of leaf definitions encountered at the option path,
-  # including those filtered out later by mkIf or by priority.
+  # Walks the supplied module list and returns the complete list of leaf
+  # definitions encountered at the option path, including those filtered
+  # out by mkIf or by priority.
   #
-  # When the module list is empty (e.g. NixOS adapter could not recover
-  # the raw modules), returns an empty definitions list. The merge step
-  # in why-option.nix degrades the output gracefully in that case.
+  # `config` is the evaluated configuration (typically the .config of
+  # the lib.evalModules result). When non-empty, we read
+  # `config._module.args` to recover the args lib.evalModules passed to
+  # function modules during its own evaluation, and re-apply them when
+  # walking function modules ourselves. When `config` is empty or has
+  # no _module.args, function modules are still attempted with `{ lib;
+  # config; }` as a minimal best-effort args set.
   fromModules =
     {
       modules,
+      config ? { },
       pathParts,
     }:
     let
-      normalized = lib.filter (m: m != null) (map normalizeModule modules);
+      tryArgs = builtins.tryEval (config._module.args or { });
+      capturedArgs = (if tryArgs.success then tryArgs.value else { }) // {
+        # Always provide lib and config; if the evaluator already had
+        # them in _module.args these are no-ops.
+        inherit lib config;
+      };
+
+      normalized = lib.filter (m: m != null) (map (normalizeModule capturedArgs) modules);
+
       perModuleDefs =
         m:
         let
@@ -96,6 +123,7 @@ in
           };
         in
         map (buildDefinition m.file) leaves;
+
       definitions = lib.concatMap perModuleDefs normalized;
     in
     {

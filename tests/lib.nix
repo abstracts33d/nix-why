@@ -21,7 +21,7 @@ let
       eval = lib.evalModules { modules = fixture.modules ++ [ permissive ]; };
       ast = nixWhy.resolve {
         inherit (fixture) modules;
-        inherit (eval) options;
+        inherit (eval) options config;
         inherit (fixture) path;
       };
       passed = fixture.assertions ast;
@@ -48,6 +48,8 @@ let
     # v0.2
     "mkforce-collision"
     "type-mismatch"
+    # post-v0.5 function-module application
+    "function-module"
   ];
 
   fixtureResults = map runFixture fixtureNames;
@@ -102,7 +104,7 @@ let
           let
             ast = nixWhy.whatSets {
               modules = simpleModules;
-              inherit (simpleEval) options;
+              inherit (simpleEval) options config;
               path = "foo.enable";
             };
           in
@@ -119,6 +121,7 @@ let
               pattern = "openssh";
               limit = 50;
             };
+            # search doesn't need config; the inherit doesn't matter
           in
           r.totalMatches == 2 && (lib.all (m: lib.hasInfix "openssh" m.path) r.matches);
       }

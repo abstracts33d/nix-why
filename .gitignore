@@ -8,3 +8,6 @@ result-*
 
 # Keep design + roadmap docs local for now
 docs/
+
+# Local-only future-work tracker
+TODO.md

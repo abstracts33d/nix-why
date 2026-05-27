@@ -9,9 +9,22 @@ let
   recoverModules =
     nixosConfig:
     let
-      tried = builtins.tryEval (nixosConfig.config._module.args.modules or [ ]);
+      # NixOS proper exposes _module via its base modules so
+      # `config._module.args.modules` works. Plain lib.evalModules
+      # consumers don't get _module declared as an option, but the
+      # eval-level _module is still accessible at the top of the
+      # result. Try both shapes.
+      fromConfig = builtins.tryEval (nixosConfig.config._module.args.modules or [ ]);
+      fromTop = builtins.tryEval (nixosConfig._module.args.modules or [ ]);
+      pick =
+        if fromConfig.success && builtins.isList fromConfig.value && fromConfig.value != [ ] then
+          fromConfig.value
+        else if fromTop.success && builtins.isList fromTop.value then
+          fromTop.value
+        else
+          [ ];
     in
-    if tried.success && builtins.isList tried.value then tried.value else [ ];
+    pick;
 in
 {
   # adapt :: nixosConfiguration -> { modules, specialArgs, config, options }

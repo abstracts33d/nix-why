@@ -100,7 +100,7 @@
             else
               throw "nix-why: lib tests failed (${libResult.summary}): ${
                 builtins.toJSON (map (r: r.name) libResult.failures)
-              }\nFixture diagnostics: ${builtins.toJSON libResult.failureDiagnostics}";
+              }";
 
           # CLI-surface bats tests; no Nix evaluation required at test
           # runtime (all tests in cli.bats cover argv / help / error

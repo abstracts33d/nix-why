@@ -69,8 +69,18 @@ let
       ) fromModulesDefs
     else
       map (def: finalizeDef (def // { wins = true; })) fromOptionsDefs;
+
+  # The mkOptionDefault priority that nixpkgs assigns to an option's
+  # declared `default`. Treating this as "not a user definition" is what
+  # lets whyNot distinguish explicit configuration from type defaults.
+  mkOptionDefaultPriority = 1500;
+
+  isTypeDefault = def: def.priority == mkOptionDefaultPriority;
+
+  isFilteredByMkIf =
+    def: def.guardedBy != null && def.guardedBy.evaluatedTo == false;
 in
-{
+rec {
   # resolve :: { modules, options, path } -> AST
   #
   # Composes the options-surface and module-walk introspection passes.
@@ -209,6 +219,76 @@ in
         ;
       inherit setters;
       moduleWalkAvailable = moduleWalk.definitions != [ ];
+    };
+
+  # whyNot :: { modules, options, path } -> AST
+  #
+  # v0.4 "why is this option not explicitly set?".
+  #
+  # NixOS treats an option's declared `default` as a definition at
+  # priority 1500 (mkOptionDefault), so a plain `resolve` reports
+  # isDefined=true even when no module touched the option. whyNot
+  # filters that out: it considers only definitions with priority
+  # other than 1500 as user-supplied, and surfaces any
+  # mkIf-filtered definitions that would have set the option had
+  # their guards held.
+  #
+  # Output AST:
+  #   path, kind, type, value, declarations  - same as resolve
+  #   isExplicitlySet :: bool
+  #     true iff there is at least one user-supplied definition
+  #     (priority != 1500), independent of whether it won the merge
+  #   explicitDefinitions :: list of definitions with priority != 1500
+  #   defaultDefinitions  :: list of definitions with priority == 1500
+  #   filteredOutDefinitions :: list of definitions with
+  #     guardedBy.evaluatedTo == false (i.e. mkIf gated them out)
+  #   hint :: string | null
+  #     when isExplicitlySet is false and there are filtered-out defs,
+  #     a short suggestion listing them
+  #   moduleWalkAvailable :: bool
+  whyNot =
+    args:
+    let
+      base = resolve args;
+      defs = base.definitions or [ ];
+
+      explicitDefinitions = lib.filter (d: !isTypeDefault d) defs;
+      defaultDefinitions = lib.filter isTypeDefault defs;
+      filteredOutDefinitions = lib.filter isFilteredByMkIf defs;
+
+      isExplicitlySet = explicitDefinitions != [ ];
+
+      describeFiltered =
+        d:
+        let
+          pos = if d.line == null then d.file else "${d.file}:${toString d.line}";
+          condSrc = if d.guardedBy.source == null then "<unknown condition>" else d.guardedBy.source;
+        in
+        "${pos} (would set when ${condSrc})";
+
+      hint =
+        if isExplicitlySet || filteredOutDefinitions == [ ] then
+          null
+        else
+          "this option is not explicitly set; the following definitions would set it if their conditions held: "
+          + lib.concatStringsSep "; " (map describeFiltered filteredOutDefinitions);
+    in
+    {
+      inherit (base)
+        path
+        kind
+        type
+        value
+        declarations
+        moduleWalkAvailable
+        ;
+      inherit
+        isExplicitlySet
+        explicitDefinitions
+        defaultDefinitions
+        filteredOutDefinitions
+        hint
+        ;
     };
 
   # search :: { options, pattern, limit ? 50 } -> { pattern, matches, truncated, totalMatches }

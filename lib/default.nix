@@ -17,6 +17,7 @@ in
     render
     whatSets
     search
+    whyNot
     ;
   inherit adapters;
 }

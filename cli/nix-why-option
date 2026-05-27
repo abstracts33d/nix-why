@@ -52,6 +52,8 @@ Flags:
   --no-color          Force-disable ANSI escapes (also respects NO_COLOR)
   --max-value N       Truncate value rendering past N characters (default 200)
   --show-trace        Pass through to nix eval for debugging the tool itself
+  --verbose           Show informational notices (e.g. module-walk
+                      opt-in tips). Silent by default.
   --adapter <name>    Force a specific adapter
                       (nixos | home-manager | nix-darwin | flake-parts | raw)
   --limit N           (search only) cap on the number of matches
@@ -74,6 +76,7 @@ max_value=200
 no_color=0
 show_trace=0
 search_limit=50
+verbose=0
 positional=()
 
 # Color autodetect: disabled if NO_COLOR is set or stdout is not a TTY.
@@ -95,6 +98,7 @@ while (($# > 0)); do
       shift
       ;;
     --show-trace) show_trace=1; shift ;;
+    --verbose) verbose=1; shift ;;
     --limit)
       search_limit="$2"
       shift 2
@@ -396,6 +400,31 @@ plural_s() {
   if [ "$1" -eq 1 ] 2> /dev/null; then printf ''; else printf 's'; fi
 }
 
+# Strip the /nix/store/<hash>-<name>/ prefix off a path so the output
+# shows just the in-source-tree portion. Falls through for paths that
+# do not look like store paths.
+strip_store_prefix() {
+  local p="$1"
+  if [[ "$p" =~ ^/nix/store/[^/]+/(.+)$ ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+  else
+    printf '%s' "$p"
+  fi
+}
+
+# Pretty-print a definition's priorityKind: prefers the AST-provided
+# label (from module-walk), falls back to deriving from the numeric
+# priority when module-walk was unavailable.
+kind_label() {
+  local from_ast="$1"
+  local prio="$2"
+  if [[ -n "$from_ast" && "$from_ast" != "null" ]]; then
+    printf '%s' "$from_ast"
+  else
+    printf '%s' "$(priority_label "$prio")"
+  fi
+}
+
 priority_label() {
   case "$1" in
     10) echo "mkVMOverride" ;;
@@ -457,14 +486,16 @@ render_conflict() {
   if ((involved_count > 0)); then
     printf '  Involved definitions:\n'
     while IFS= read -r def; do
-      local file line priorityKind value pos
+      local file line priority priorityKind value pos kind
       file=$(jq -r '.file // "<unknown>"' <<< "$def")
       line=$(jq -r '.line // empty' <<< "$def")
+      priority=$(jq -r '.priority // "null"' <<< "$def")
       priorityKind=$(jq -r '.priorityKind // empty' <<< "$def")
       value=$(jq -c '.value' <<< "$def")
-      pos="$file"
-      [[ -n "$line" ]] && pos="${file}:${line}"
-      printf '    - %s [%s] → %s\n' "$pos" "${priorityKind:-unknown}" "$(render_value "$value" "$max_value")"
+      pos="$(strip_store_prefix "$file")"
+      [[ -n "$line" ]] && pos="${pos}:${line}"
+      kind="$(kind_label "$priorityKind" "$priority")"
+      printf '    - %s [%s] → %s\n' "$pos" "$kind" "$(render_value "$value" "$max_value")"
     done < <(jq -c '.involvedDefinitions[]' <<< "$conflict")
   fi
 }
@@ -498,7 +529,7 @@ render_tree() {
   # Declarations
   while IFS= read -r decl; do
     local f l
-    f=$(jq -r '.file' <<< "$decl")
+    f=$(strip_store_prefix "$(jq -r '.file' <<< "$decl")")
     l=$(jq -r '.line // empty' <<< "$decl")
     if [[ -n "$l" ]]; then
       printf '  declared  %s:%s\n' "$f" "$l"
@@ -550,12 +581,14 @@ render_def() {
     marker_glyph="${C_GREEN}✓${C_RESET}"
   fi
 
-  local pos="$file"
-  [[ -n "$line" ]] && pos="${file}:${line}"
+  local pos
+  pos="$(strip_store_prefix "$file")"
+  [[ -n "$line" ]] && pos="${pos}:${line}"
   printf '%b %s\n' "$marker_glyph" "$pos"
 
   # Priority line with mkIf annotation when guarded.
-  local kind_disp="${priorityKind:-unknown}"
+  local kind_disp
+  kind_disp="$(kind_label "$priorityKind" "$priority")"
   local kind_full="$kind_disp"
   [[ -n "$guard_eval" ]] && kind_full="${kind_disp}, via mkIf"
 
@@ -636,13 +669,15 @@ render_what_sets() {
   printf '  %d module%s set this option:\n\n' "$setter_count" "$(plural_s "$setter_count")"
 
   while IFS= read -r setter; do
-    local file line priorityKind guard_eval pos
+    local file line priority priorityKind guard_eval pos kind
     file=$(jq -r '.file // "<unknown>"' <<< "$setter")
     line=$(jq -r '.line // empty' <<< "$setter")
-    priorityKind=$(jq -r '.priorityKind // "unknown"' <<< "$setter")
+    priority=$(jq -r '.priority // "null"' <<< "$setter")
+    priorityKind=$(jq -r '.priorityKind // empty' <<< "$setter")
     guard_eval=$(jq -r '.guardedBy.evaluatedTo // empty' <<< "$setter")
-    pos="$file"
-    [[ -n "$line" ]] && pos="${file}:${line}"
+    pos="$(strip_store_prefix "$file")"
+    [[ -n "$line" ]] && pos="${pos}:${line}"
+    kind="$(kind_label "$priorityKind" "$priority")"
 
     local annotation=""
     if [[ -n "$guard_eval" ]]; then
@@ -653,7 +688,7 @@ render_what_sets() {
       fi
     fi
 
-    printf '    - %s [%s]%s\n' "$pos" "$priorityKind" "$annotation"
+    printf '    - %s [%s]%s\n' "$pos" "$kind" "$annotation"
   done < <(jq -c '.setters[]' <<< "$ast")
 }
 
@@ -693,14 +728,16 @@ render_search_brief() {
 
 render_def_line() {
   local def="$1"
-  local file line priorityKind value pos
+  local file line priority priorityKind value pos kind
   file=$(jq -r '.file // "<unknown>"' <<< "$def")
   line=$(jq -r '.line // empty' <<< "$def")
-  priorityKind=$(jq -r '.priorityKind // "unknown"' <<< "$def")
+  priority=$(jq -r '.priority // "null"' <<< "$def")
+  priorityKind=$(jq -r '.priorityKind // empty' <<< "$def")
   value=$(jq -c '.value' <<< "$def")
-  pos="$file"
-  [[ -n "$line" ]] && pos="${file}:${line}"
-  printf '    - %s [%s] → %s\n' "$pos" "$priorityKind" "$(render_value "$value" "$max_value")"
+  pos="$(strip_store_prefix "$file")"
+  [[ -n "$line" ]] && pos="${pos}:${line}"
+  kind="$(kind_label "$priorityKind" "$priority")"
+  printf '    - %s [%s] → %s\n' "$pos" "$kind" "$(render_value "$value" "$max_value")"
 }
 
 render_why_not() {
@@ -803,13 +840,15 @@ case "$format" in
     ;;
 esac
 
-# moduleWalkAvailable=false triggers the documented stderr warning. The
-# field is only present on resolve / whatSets ASTs.
-if [[ "$subcommand" != "search" ]] \
+# moduleWalkAvailable=false triggers an informational notice, but only
+# when --verbose is set. By default this is silent: hitting this state
+# on a stock NixOS config is the common case, not an exceptional one.
+if ((verbose)) \
+  && [[ "$subcommand" != "search" ]] \
   && [[ "$(printf '%s' "$ast_json" | jq -r '.moduleWalkAvailable')" == "false" ]]; then
-  echo "warning: nix-why-option: module-walk introspection unavailable" >&2
-  echo "         (per-definition priorities and line numbers will be missing)" >&2
-  echo "         opt-in: set _module.args.modules = <your module list> in your config" >&2
+  echo "note: nix-why-option: module-walk introspection unavailable" >&2
+  echo "      (per-definition priorities and line numbers will be missing)" >&2
+  echo "      opt-in: set _module.args.modules = <your module list> in your config" >&2
 fi
 
 # Exit code: search is 0 if any matches, otherwise treat as not-found.

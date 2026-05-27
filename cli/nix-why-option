@@ -264,10 +264,9 @@ nix_rc=0
 }
 
 if ((nix_rc != 0)); then
-  # Classify the error. Map well-known patterns to specific exit
-  # codes; everything else is a generic evaluation error (exit 4).
-  # Schema/flake-target errors get exit 3; path-not-found gets exit 3
-  # too since it is a "flake target not reachable" failure mode.
+  nix_why_emit_error_from_stderr nix-why-option "$format" "$nix_stderr" "$show_trace"
+  # Schema / target-reachability errors map to exit 3; everything
+  # else is a generic evaluation error (exit 4).
   case "$nix_stderr" in
     *"nix-why: '"*"' did not match any of "* | \
       *"nix-why: '"*"' is ambiguous"* | \
@@ -277,11 +276,9 @@ if ((nix_rc != 0)); then
       *"nix-why: unknown adapter"* | \
       *"error: path '"*"' does not exist"* | \
       *"error: attribute '"*"' missing"*)
-      nix_why_render_error nix-why-option "$nix_stderr" "$show_trace"
       exit 3
       ;;
     *)
-      nix_why_render_error nix-why-option "$nix_stderr" "$show_trace"
       exit 4
       ;;
   esac
@@ -300,15 +297,18 @@ if [[ "$subcommand" != "search" ]]; then
       # Defined or not, full output below. Exit code 1 if not defined.
       ;;
     "not-found")
-      echo "nix-why-option: option '${option_path}' does not exist" >&2
+      nix_why_emit_error nix-why-option "$format" "option-not-found" \
+        "option '${option_path}' does not exist"
       exit 2
       ;;
     "not-an-option")
-      echo "nix-why-option: '${option_path}' exists in the options tree but is not a leaf option" >&2
+      nix_why_emit_error nix-why-option "$format" "not-an-option" \
+        "'${option_path}' exists in the options tree but is not a leaf option"
       exit 2
       ;;
     *)
-      echo "nix-why-option: unexpected AST kind '${kind}'" >&2
+      nix_why_emit_error nix-why-option "$format" "internal-error" \
+        "unexpected AST kind '${kind}'"
       exit 4
       ;;
   esac

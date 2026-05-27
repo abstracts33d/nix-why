@@ -156,24 +156,31 @@ ast_json="$(nix-instantiate "${nix_eval_args[@]}" 2> "${stderr_file}")" || nix_r
 nix_stderr="$(cat "${stderr_file}")"
 
 if ((nix_rc != 0)); then
+  nix_why_emit_error_from_stderr nix-why-overlay "$format" "$nix_stderr" "$show_trace"
   case "$nix_stderr" in
     *"nix-why-overlay: attribute path"* | \
       *"nix-why-overlay: no attribute path given"* | \
       *"error: path '"*"' does not exist"* | \
       *"error: attribute '"*"' missing"*)
-      nix_why_render_error nix-why-overlay "$nix_stderr" "$show_trace"
       exit 3
       ;;
     *)
-      nix_why_render_error nix-why-overlay "$nix_stderr" "$show_trace"
       exit 4
       ;;
   esac
 fi
 
+# Discovery-level failure surfaced in the driver's output (no
+# overlays located, no baseline nixpkgs source, etc.). The AST
+# already carries schemaVersion + error so JSON consumers get a
+# structured response; text mode gets a one-liner.
 err="$(printf '%s' "$ast_json" | jq -r '.error // empty')"
 if [[ -n "$err" ]]; then
-  echo "nix-why-overlay: $err" >&2
+  if [[ $format == "json" ]]; then
+    printf '%s\n' "$ast_json"
+  else
+    printf 'nix-why-overlay: %s\n' "$err" >&2
+  fi
   exit 3
 fi
 

@@ -138,6 +138,7 @@ ast_json="$(nix-instantiate "${nix_eval_args[@]}" 2> "${stderr_file}")" || nix_r
 nix_stderr="$(cat "${stderr_file}")"
 
 if ((nix_rc != 0)); then
+  nix_why_emit_error_from_stderr nix-why-conflict "$format" "$nix_stderr" "$show_trace"
   case "$nix_stderr" in
     *"nix-why: '"*"' did not match any of "* | \
       *"nix-why: '"*"' is ambiguous"* | \
@@ -147,11 +148,9 @@ if ((nix_rc != 0)); then
       *"nix-why: unknown adapter"* | \
       *"error: path '"*"' does not exist"* | \
       *"error: attribute '"*"' missing"*)
-      nix_why_render_error nix-why-conflict "$nix_stderr" "$show_trace"
       exit 3
       ;;
     *)
-      nix_why_render_error nix-why-conflict "$nix_stderr" "$show_trace"
       exit 4
       ;;
   esac
@@ -161,15 +160,18 @@ kind="$(printf '%s' "$ast_json" | jq -r '.kind')"
 case "$kind" in
   "option") ;;
   "not-found")
-    echo "nix-why-conflict: option '${option_path}' does not exist" >&2
+    nix_why_emit_error nix-why-conflict "$format" "option-not-found" \
+      "option '${option_path}' does not exist"
     exit 2
     ;;
   "not-an-option")
-    echo "nix-why-conflict: '${option_path}' exists but is not a leaf option" >&2
+    nix_why_emit_error nix-why-conflict "$format" "not-an-option" \
+      "'${option_path}' exists but is not a leaf option"
     exit 2
     ;;
   *)
-    echo "nix-why-conflict: unexpected AST kind '${kind}'" >&2
+    nix_why_emit_error nix-why-conflict "$format" "internal-error" \
+      "unexpected AST kind '${kind}'"
     exit 4
     ;;
 esac

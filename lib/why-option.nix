@@ -318,6 +318,11 @@ rec {
   # pattern match against the dotted path. Used by `nix-why-option
   # search` to find the right option name from a fuzzy symptom.
   #
+  # When a leaf option's type is `submodule`, the search also descends
+  # into the submodule's declared sub-options via `getSubOptions []`.
+  # `attrsOf submodule` sub-options are exposed under the key
+  # placeholder `"<name>"` so they remain searchable.
+  #
   # Returns at most `limit` matches; `truncated` indicates whether more
   # were available.
   search =
@@ -325,10 +330,33 @@ rec {
       options,
       pattern,
       limit ? 50,
+      maxSubmoduleDepth ? 2,
     }:
     let
+      # Walk into the sub-options tree of a submodule-typed option.
+      # Returns an attrset of sub-options on success, null on any
+      # eval failure (so search stays robust against odd type configs).
+      subOptionsOf =
+        opt:
+        let
+          typeName = opt.type.name or null;
+          subOptsTried =
+            if typeName == "submodule" then
+              builtins.tryEval (opt.type.getSubOptions [ ])
+            else if typeName == "attrsOf" && (opt.type.nestedTypes.elemType.name or null) == "submodule" then
+              builtins.tryEval (opt.type.nestedTypes.elemType.getSubOptions [ ])
+            else
+              { success = false; };
+        in
+        if subOptsTried.success && builtins.isAttrs subOptsTried.value then subOptsTried.value else null;
+
+      # `depth` counts how many submodule pivots we've taken from the
+      # root options tree. Each submodule expansion consumes one
+      # depth budget. Limit prevents pathological blow-up on options
+      # trees with deeply nested submodule chains (e.g. nixpkgs'
+      # services.* with attrsOf submodule of attrsOf submodule of ...).
       collectAllOptions =
-        prefix: attrs:
+        depth: prefix: attrs:
         let
           names = builtins.attrNames attrs;
         in
@@ -341,23 +369,33 @@ rec {
             isAttr = builtins.isAttrs value;
             isOption = isAttr && ((value._type or null) == "option");
             isContainer = isAttr && !isOption;
+            # For submodule-typed options, descend into their
+            # sub-options - but only while the depth budget allows.
+            # The placeholder `<name>` is appended for attrsOf
+            # submodule sub-paths so they remain queryable.
+            subOpts = if isOption && depth > 0 then subOptionsOf value else null;
+            subPrefix =
+              if isOption && (value.type.name or null) == "attrsOf" then here ++ [ "<name>" ] else here;
           in
           if isOption then
-            [
-              {
-                path = herePath;
-                type = value.type.name or null;
-                declarations = value.declarations or [ ];
-                isDefined = value.isDefined or false;
-              }
-            ]
+            (
+              [
+                {
+                  path = herePath;
+                  type = value.type.name or null;
+                  declarations = value.declarations or [ ];
+                  isDefined = value.isDefined or false;
+                }
+              ]
+              ++ (if subOpts == null then [ ] else collectAllOptions (depth - 1) subPrefix subOpts)
+            )
           else if isContainer then
-            collectAllOptions here value
+            collectAllOptions depth here value
           else
             [ ]
         ) names;
 
-      all = collectAllOptions [ ] options;
+      all = collectAllOptions maxSubmoduleDepth [ ] options;
       matches = lib.filter (entry: lib.hasInfix pattern entry.path) all;
       total = builtins.length matches;
       truncated = limit > 0 && total > limit;

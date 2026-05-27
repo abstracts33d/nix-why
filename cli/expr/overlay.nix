@@ -267,12 +267,25 @@ else
           finalKind = (lib.last signatures).kind;
         };
 
+    # Listing mode: for each overlay, report the attribute names IT
+    # contributed. The correct semantic is to call the overlay with
+    # the same (final, prev) it received during its own `extend`:
+    #   final = cumulatives[idx + 1]  (post-this-overlay)
+    #   prev  = cumulatives[idx]      (pre-this-overlay)
+    # When cumulatives is empty (no baseline available, e.g. pkgs.path
+    # was unset), fall back to (pkgs, pkgs) which is approximate but
+    # still useful for independent overlays.
     listingOverlays =
       let
+        haveCumulatives = cumulatives != [ ];
         describe =
           idx: overlay:
           let
-            applied = tryRead (overlay pkgs pkgs);
+            applied =
+              if haveCumulatives then
+                tryRead (overlay (builtins.elemAt cumulatives (idx + 1)) (builtins.elemAt cumulatives idx))
+              else
+                tryRead (overlay pkgs pkgs);
             names =
               if applied.success && builtins.isAttrs applied.value then builtins.attrNames applied.value else [ ];
           in

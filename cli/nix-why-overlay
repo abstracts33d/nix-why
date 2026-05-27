@@ -251,8 +251,8 @@ else
           );
           # For derivations: capture comparable fields so per-field diff
           # works downstream. Each field is wrapped in tryEval - an
-          # overlay can produce a derivation without `version` etc.
-          drvField = name: let t = tryRead (v.${name} or null); in if t.success then t.value else null;
+          # overlay can produce a derivation without "version" etc.
+          drvField = name: let t = tryRead (v.\${name} or null); in if t.success then t.value else null;
         in
         if builtins.isAttrs v && drvTried.success && drvTried.value != null then
           {
@@ -288,7 +288,7 @@ else
       else
         let
           fieldNames = [ "name" "version" "pname" "outputName" "system" ];
-          diff = builtins.filter (fn: (prev.fields.${fn} or null) != (curr.fields.${fn} or null)) fieldNames;
+          diff = builtins.filter (fn: (prev.fields.\${fn} or null) != (curr.fields.\${fn} or null)) fieldNames;
         in
         if diff != [ ] then diff
         else if prev.drvPath != curr.drvPath then [ "drvPath" ]
@@ -341,7 +341,7 @@ else
               last = lib.findFirst (d: true) null (lib.reverseList changeDiffs);
             in
             if last == null then "none"
-            else "${builtins.elemAt overlayNames last.overlayIndex} (${last.kind})";
+            else "\${builtins.elemAt overlayNames last.overlayIndex} (\${last.kind})";
         in
         {
           inherit firstAppearance lastModification;
@@ -366,9 +366,9 @@ else
         suffix = if builtins.length names > 2 then ", ..." else "";
       in
       if names == [ ] then
-        "overlay ${toString idx}"
+        "overlay \${toString idx}"
       else
-        "overlay ${toString idx} (${lib.concatStringsSep ", " sample}${suffix})";
+        "overlay \${toString idx} (\${lib.concatStringsSep ", " sample}\${suffix})";
 
     overlayNames = lib.imap0 synthName overlays;
 

@@ -6,6 +6,41 @@ uses semantic versioning.
 
 ## Unreleased
 
+### v0.5 - overlay attribution
+
+`nix-why-overlay` gains a second invocation form that does what the
+original brief implied but the v0.4 MVP did not deliver: given a
+flake target AND a dotted attribute path into pkgs, identify which
+overlay introduced or modified the attribute.
+
+Added:
+- Attribution mode: `nix-why-overlay <flake-target> <attr-path>`.
+  Builds a baseline `nixpkgs` (no overlays) from `pkgs.path`, folds
+  the user's overlays cumulatively via `pkgs.extend`, computes a
+  signature of the queried attribute at each step (drvPath for
+  derivations, attrNames for attrsets, value for primitives), then
+  diffs consecutive signatures into `introduced` / `modified` /
+  `removed` / `unchanged` classifications.
+- New AST shape with `mode: "attribution"` carrying signatures,
+  per-overlay diffs, and a summary (firstAppearance,
+  lastModification, changeCount, finalKind).
+- Tree renderer prints a per-overlay history block + a summary
+  block. Markers: `+` introduced, `~` modified, `-` removed, space
+  unchanged.
+- Exit code 1 when the attribute never appears in any overlay step.
+- Exit code 3 when the baseline nixpkgs source cannot be located
+  (target's pkgs lacks `pkgs.path`).
+- Documented at docs/roadmap/v0.5-overlay-attribution.md.
+
+The v0.4 listing mode (no attr-path) is unchanged.
+
+Limitations explicitly out of scope:
+- Overlays are reported by index. Source-position name recovery
+  via `unsafeGetAttrPos` is future work.
+- A "modified" derivation is reported as a single event; per-field
+  diffs inside the derivation are not surfaced.
+- Cost is O(N x nixpkgs eval) for N overlays. Caching deferred.
+
 ### Sibling tools
 
 Added three siblings under the `nix-why` umbrella, each a separate

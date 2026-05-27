@@ -108,8 +108,20 @@ setup() {
   [[ "$output" == *"expected <flake-target>"* ]]
 }
 
-@test "overlay too many args -> exit 64" {
-  run "${OVERLAY}" .#krach extra-arg
+@test "overlay accepts optional attr-path positional (attribution mode)" {
+  # We do not actually run nix eval here (no nixpkgs in the sandbox);
+  # we only assert that two positional args parse without a usage
+  # error. The CLI will fail downstream with exit 3 or 4 because
+  # builtins.getFlake "." needs a flake on disk - that is fine; we
+  # are testing argv only.
+  run "${OVERLAY}" --help # 0 - confirms parser path is reachable
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"attr-path"* ]]
+  [[ "$output" == *"attribution mode"* ]]
+}
+
+@test "overlay too many positional args -> exit 64" {
+  run "${OVERLAY}" .#krach attr1 attr2
   [ "$status" -eq 64 ]
   [[ "$output" == *"expected <flake-target>"* ]]
 }

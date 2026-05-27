@@ -1,26 +1,27 @@
 #!/usr/bin/env bash
-# nix-why-overlay - list nixpkgs overlays applied to a flake target
+# nix-why-overlay - which overlay sets this attribute? (v0.5)
 #
-# MVP scope:
-#   - point at a NixOS / nix-darwin / home-manager config OR a flake's
-#     legacyPackages.<system>
-#   - extract config.nixpkgs.overlays (or pkgs.overlays as fallback)
-#   - for each overlay, evaluate it against the resolved final/prev
-#     and report the top-level attribute names it contributes
+# Two modes:
 #
-# Per-attribute "which overlay set this attribute?" attribution is
-# deferred to the next iteration - it requires re-folding overlays
-# step by step and diffing each result, which has very different
-# evaluation characteristics from module-system introspection.
+#   listing      nix-why-overlay <flake-target>
+#                  Lists every overlay applied to the target's nixpkgs
+#                  and the top-level attributes each contributes.
+#
+#   attribution  nix-why-overlay <flake-target> <attr-path>
+#                  For a specific attribute (e.g. pkgs.firefox), folds
+#                  the overlays one at a time against a baseline
+#                  nixpkgs and reports which overlay introduced or
+#                  modified the attribute.
 
 set -euo pipefail
 
 print_usage() {
   cat << 'EOF'
-nix-why-overlay - list nixpkgs overlays applied to a flake target
+nix-why-overlay - explain how an attribute came to be on pkgs
 
 Usage:
-  nix-why-overlay <flake-target> [flags]
+  nix-why-overlay <flake-target>                  (listing mode)
+  nix-why-overlay <flake-target> <attr-path>      (attribution mode)
 
 Flake targets:
   .#nixosConfigurations.<host>
@@ -28,16 +29,23 @@ Flake targets:
   .#homeConfigurations."<user@host>"
   .#legacyPackages.<system>
 
+Attribute path:
+  Dotted path INTO pkgs - e.g. `firefox`, `firefox.override`,
+  `python311Packages.requests`.
+
 Flags:
-  --json              Emit the overlay list as JSON
+  --json              Emit the AST as JSON
   --no-color          Force-disable ANSI escapes (also respects NO_COLOR)
-  --limit N           Cap per-overlay attribute list length (default 20)
+  --limit N           (listing) cap the per-overlay attribute list at N
+                      (default 20)
   --show-trace        Pass through to nix eval
   -h, --help          Show this help
 
 Exit codes:
-  0   overlays listed (zero or more)
-  3   flake target not found or wrong schema
+  0   overlays listed OR attribution completed
+  1   attribution: attribute never appeared in any overlay step
+  3   flake target not found, no overlays discoverable, or baseline
+      nixpkgs source could not be located
   4   evaluation error
   64  usage error
 EOF
@@ -91,13 +99,14 @@ while (($# > 0)); do
   esac
 done
 
-if (("${#positional[@]}" != 1)); then
-  echo "nix-why-overlay: expected <flake-target> (got ${#positional[@]} positional args)" >&2
+if (("${#positional[@]}" < 1 || "${#positional[@]}" > 2)); then
+  echo "nix-why-overlay: expected <flake-target> [<attr-path>] (got ${#positional[@]} positional args)" >&2
   print_usage >&2
   exit 64
 fi
 
 flake_target="${positional[0]}"
+attr_path="${positional[1]:-}"
 
 if [[ "$flake_target" == *"#"* ]]; then
   flake_ref="${flake_target%%#*}"
@@ -114,104 +123,232 @@ if ((no_color)); then
   C_DIM=""
   C_CYAN=""
   C_YELLOW=""
+  C_GREEN=""
+  C_MAGENTA=""
 else
   C_RESET=$'\033[0m'
   C_BOLD=$'\033[1m'
   C_DIM=$'\033[2m'
   C_CYAN=$'\033[36m'
   C_YELLOW=$'\033[33m'
+  C_GREEN=$'\033[32m'
+  C_MAGENTA=$'\033[35m'
 fi
 
-# Build the Nix expression. The strategy:
-#   1. Resolve the flake target as an attrByPath of the flake.
-#   2. Probe known shapes for overlays:
-#        nixos / darwin / hm:    config.nixpkgs.overlays
-#                                pkgs.overlays (older shapes)
-#        legacyPackages.<sys>:   .overlays   (raw nixpkgs has this attr)
-#   3. For each overlay, apply it against final=prev=<the resolved
-#      pkgs> wrapped in tryEval and report attrNames of the result.
+# ---------------------------------------------------------------------------
+# Build the Nix expression
+# ---------------------------------------------------------------------------
+# The expression branches on whether attr_path is given:
+#   - empty:        listing mode (each overlay's contributed attrs)
+#   - non-empty:    attribution mode (cumulative fold + signature diff)
+#
+# Both modes share the discovery logic: locate overlays + applied pkgs +
+# the original nixpkgs source for a clean baseline.
 nix_expr=$(
   cat << NIXEXPR
 let
   lib = (import <nixpkgs> { }).lib;
   flake = builtins.getFlake ("${flake_ref}");
 
-  attr = "${attr_expr}";
-  parts = if attr == "" then [ ] else lib.splitString "." attr;
-
+  flakeAttr = "${attr_expr}";
+  parts = if flakeAttr == "" then [ ] else lib.splitString "." flakeAttr;
   target =
-    if parts == [ ]
-    then throw "nix-why-overlay: no attribute path given after '#'"
-    else lib.attrByPath parts (throw "nix-why-overlay: attribute path '\${attr}' not found in flake") flake;
+    if parts == [ ] then
+      throw "nix-why-overlay: no attribute path given after '#'"
+    else
+      lib.attrByPath parts (throw "nix-why-overlay: attribute path '\${flakeAttr}' not found in flake") flake;
 
-  # Best-effort discovery of (pkgs, overlays) from the target's shape.
+  attrPath = "${attr_path}";
+  pathParts = if attrPath == "" then [ ] else lib.splitString "." attrPath;
+
   discovery =
     let
       tries = [
-        # NixOS / nix-darwin / HM evaluated config
         (
-          if (target ? config && target.config ? nixpkgs && target.config.nixpkgs ? overlays)
-          then { pkgs = target.config.nixpkgs.pkgs or (target._module.args.pkgs or null); overlays = target.config.nixpkgs.overlays; }
+          if (target ? config && target.config ? nixpkgs && target.config.nixpkgs ? overlays && target.config ? _module && target.config._module ? args && target.config._module.args ? pkgs)
+          then { pkgs = target.config._module.args.pkgs; overlays = target.config.nixpkgs.overlays; nixpkgsConfig = target.config.nixpkgs.config or { }; }
           else null
         )
-        # Some configs surface pkgs at _module.args
         (
           if (target ? _module && target._module ? args && target._module.args ? pkgs && target._module.args.pkgs ? overlays)
-          then { inherit (target._module.args) pkgs; overlays = target._module.args.pkgs.overlays; }
+          then { inherit (target._module.args) pkgs; overlays = target._module.args.pkgs.overlays; nixpkgsConfig = target._module.args.pkgs.config or { }; }
           else null
         )
-        # legacyPackages.<system> shape (raw nixpkgs result)
         (
           if (target ? overlays && target ? pkgs && builtins.isList target.overlays)
-          then { inherit (target) pkgs overlays; }
+          then { inherit (target) pkgs overlays; nixpkgsConfig = target.pkgs.config or { }; }
           else null
         )
-        # legacyPackages.<system> shape where the target IS pkgs
         (
           if (target ? lib && target ? stdenv && target ? overlays && builtins.isList target.overlays)
-          then { pkgs = target; inherit (target) overlays; }
+          then { pkgs = target; inherit (target) overlays; nixpkgsConfig = target.config or { }; }
           else null
         )
       ];
       hit = lib.findFirst (x: x != null) null tries;
     in
     hit;
-
 in
 if discovery == null then
   {
-    error = "could not locate overlays on the target. Tried: config.nixpkgs.overlays, _module.args.pkgs.overlays, target.overlays. Point me at .#nixosConfigurations.<host> or .#legacyPackages.<system>.";
-    overlays = [ ];
+    error = "could not locate overlays on the target. Tried NixOS/HM/darwin config.nixpkgs, _module.args.pkgs, target.overlays, and target-is-pkgs shapes. Point me at .#nixosConfigurations.<host> or .#legacyPackages.<system>.";
   }
 else
   let
     pkgs = discovery.pkgs;
     overlays = discovery.overlays;
 
-    describeOverlay =
-      idx: overlay:
+    # Try to recover the underlying nixpkgs source. \`pkgs.path\` is the
+    # standard way; falls back to null when the pkgs instance was built
+    # in a way that did not retain it.
+    nixpkgsSrc = pkgs.path or null;
+    canBuildBaseline = nixpkgsSrc != null;
+
+    system = pkgs.stdenv.hostPlatform.system or builtins.currentSystem;
+
+    # Baseline pkgs: the same nixpkgs source the target uses, but with
+    # no user overlays applied. Used only in attribution mode.
+    baselinePkgs =
+      if canBuildBaseline
+      then import nixpkgsSrc { inherit system; config = discovery.nixpkgsConfig; overlays = [ ]; }
+      else null;
+
+    # Cumulative fold: [ baseline, after-o0, after-o1, ... ]
+    cumulatives =
+      if canBuildBaseline
+      then lib.foldl (acc: ov: acc ++ [ ((lib.last acc).extend ov) ]) [ baselinePkgs ] overlays
+      else [ ];
+
+    # Compute a comparable signature for the attribute at one pkgs step.
+    sigOf =
+      pkgsInst:
       let
-        applied = builtins.tryEval (overlay pkgs pkgs);
-        names =
-          if applied.success && builtins.isAttrs applied.value
-          then builtins.attrNames applied.value
-          else [ ];
-        appliedOk = applied.success;
+        tried = builtins.tryEval (lib.attrByPath pathParts null pkgsInst);
+      in
+      if !tried.success then
+        { kind = "eval-error"; }
+      else if tried.value == null then
+        { kind = "missing"; }
+      else
+        let
+          v = tried.value;
+          drvTried = builtins.tryEval (v.drvPath or null);
+          namesTried = builtins.tryEval (if builtins.isAttrs v then builtins.attrNames v else [ ]);
+          strTried = builtins.tryEval (
+            if builtins.isFunction v then "<function>"
+            else builtins.toString v
+          );
+        in
+        if builtins.isAttrs v && drvTried.success && drvTried.value != null then
+          { kind = "derivation"; drvPath = drvTried.value; }
+        else if builtins.isAttrs v then
+          { kind = "attrset"; attrNames = if namesTried.success then namesTried.value else [ ]; }
+        else if builtins.isFunction v then
+          { kind = "function"; }
+        else if builtins.isList v then
+          { kind = "list"; length = builtins.length v; }
+        else
+          { kind = builtins.typeOf v; value = if strTried.success then strTried.value else "(unprintable)"; };
+
+    signatures = map sigOf cumulatives;
+
+    # One diff per overlay: comparing signatures[i] to signatures[i+1].
+    diffOf =
+      i:
+      let
+        prev = builtins.elemAt signatures i;
+        curr = builtins.elemAt signatures (i + 1);
+        same = prev == curr;
+        prevMissing = prev.kind == "missing";
+        currMissing = curr.kind == "missing";
+        kind =
+          if same then "unchanged"
+          else if prevMissing && !currMissing then "introduced"
+          else if !prevMissing && currMissing then "removed"
+          else "modified";
       in
       {
-        index = idx;
-        appliedOk = appliedOk;
-        attributeCount = builtins.length names;
-        attributes = names;
+        overlayIndex = i;
+        kind = kind;
+        prevKind = prev.kind;
+        currKind = curr.kind;
+        prevSummary = builtins.toJSON prev;
+        currSummary = builtins.toJSON curr;
       };
 
-    described = lib.imap0 describeOverlay overlays;
+    diffs =
+      if pathParts == [ ] then [ ]
+      else lib.genList diffOf (builtins.length overlays);
+
+    changeDiffs = lib.filter (d: d.kind != "unchanged") diffs;
+
+    summary =
+      if pathParts == [ ] then null
+      else
+        let
+          firstAppearance =
+            let
+              baseline = builtins.head signatures;
+              firstChange = lib.findFirst (d: d.kind == "introduced") null diffs;
+            in
+            if baseline.kind != "missing" then "baseline"
+            else if firstChange != null then "overlay ${toString firstChange.overlayIndex}"
+            else "never";
+          lastModification =
+            let
+              last = lib.findFirst (d: true) null (lib.reverseList changeDiffs);
+            in
+            if last == null then "none" else "overlay ${toString last.overlayIndex} (${last.kind})";
+        in
+        {
+          inherit firstAppearance lastModification;
+          changeCount = builtins.length changeDiffs;
+          finalKind = (lib.last signatures).kind;
+        };
+
+    # Listing mode (no attrPath given): keep the v0.4 MVP behaviour.
+    listingOverlays =
+      let
+        describe =
+          idx: overlay:
+          let
+            applied = builtins.tryEval (overlay pkgs pkgs);
+            names =
+              if applied.success && builtins.isAttrs applied.value
+              then builtins.attrNames applied.value
+              else [ ];
+          in
+          {
+            index = idx;
+            appliedOk = applied.success;
+            attributeCount = builtins.length names;
+            attributes = names;
+          };
+      in
+      lib.imap0 describe overlays;
   in
-  {
-    error = null;
-    overlayCount = builtins.length overlays;
-    overlays = described;
-  }
+  if pathParts == [ ] then
+    {
+      mode = "listing";
+      error = null;
+      overlayCount = builtins.length overlays;
+      overlays = listingOverlays;
+    }
+  else if !canBuildBaseline then
+    {
+      mode = "attribution";
+      error = "could not locate baseline nixpkgs source (pkgs.path is unset on this target). Attribution requires a baseline to fold overlays against.";
+    }
+  else
+    {
+      mode = "attribution";
+      error = null;
+      path = attrPath;
+      overlayCount = builtins.length overlays;
+      signatures = signatures;
+      diffs = diffs;
+      inherit summary;
+    }
 NIXEXPR
 )
 
@@ -246,35 +383,115 @@ fi
 
 if [[ "$format" == "json" ]]; then
   printf '%s\n' "$ast_json"
+  # Attribution: exit 1 if the attribute never appeared anywhere.
+  if [[ "$(printf '%s' "$ast_json" | jq -r '.mode')" == "attribution" ]]; then
+    final_kind="$(printf '%s' "$ast_json" | jq -r '.summary.finalKind // "missing"')"
+    [[ "$final_kind" == "missing" ]] && exit 1
+  fi
   exit 0
 fi
 
+mode="$(printf '%s' "$ast_json" | jq -r '.mode')"
+
+if [[ "$mode" == "listing" ]]; then
+  overlay_count="$(printf '%s' "$ast_json" | jq -r '.overlayCount')"
+  printf '%btarget:%b %s\n' "$C_BOLD" "$C_RESET" "$flake_target"
+  printf '%boverlays:%b %d\n\n' "$C_BOLD" "$C_RESET" "$overlay_count"
+
+  if ((overlay_count == 0)); then
+    printf '  %b(no overlays applied)%b\n' "$C_DIM" "$C_RESET"
+    exit 0
+  fi
+
+  while IFS= read -r overlay; do
+    idx=$(jq -r '.index' <<< "$overlay")
+    ok=$(jq -r '.appliedOk' <<< "$overlay")
+    count=$(jq -r '.attributeCount' <<< "$overlay")
+    printf '  %boverlay %d%b' "$C_CYAN" "$idx" "$C_RESET"
+    if [[ "$ok" == "false" ]]; then
+      printf ' %b(evaluation failed; cannot enumerate attributes)%b\n' "$C_YELLOW" "$C_RESET"
+      continue
+    fi
+    printf '  %b%d attribute%s contributed%b\n' \
+      "$C_DIM" "$count" "$(((count == 1) ? "" : "s"))" "$C_RESET"
+    while IFS= read -r attr; do
+      printf '    - %s\n' "$attr"
+    done < <(jq -r --argjson lim "$attr_limit" '.attributes[0:$lim][]' <<< "$overlay")
+    if ((count > attr_limit)); then
+      printf '    %b...%d more (raise --limit to see)%b\n' "$C_DIM" "$((count - attr_limit))" "$C_RESET"
+    fi
+  done < <(jq -c '.overlays[]' <<< "$ast_json")
+  exit 0
+fi
+
+# -------- attribution mode --------------------------------------------------
+
+# Render a single signature object as a compact one-line summary.
+format_sig() {
+  local s="$1"
+  local k
+  k=$(jq -r '.kind' <<< "$s")
+  case "$k" in
+    derivation)
+      printf 'derivation drvPath=%s' "$(jq -r '.drvPath' <<< "$s")"
+      ;;
+    attrset)
+      printf 'attrset (%d keys)' "$(jq -r '.attrNames | length' <<< "$s")"
+      ;;
+    list)
+      printf 'list (%d items)' "$(jq -r '.length' <<< "$s")"
+      ;;
+    function) printf 'function' ;;
+    missing) printf '%b(not present)%b' "$C_DIM" "$C_RESET" ;;
+    eval-error) printf '%b(eval error)%b' "$C_YELLOW" "$C_RESET" ;;
+    *) printf '%s' "$(jq -r '"\(.kind)=\(.value // "?")"' <<< "$s")" ;;
+  esac
+}
+
+path="$(printf '%s' "$ast_json" | jq -r '.path')"
 overlay_count="$(printf '%s' "$ast_json" | jq -r '.overlayCount')"
-printf '%btarget:%b %s\n' "$C_BOLD" "$C_RESET" "$flake_target"
-printf '%boverlays:%b %d\n\n' "$C_BOLD" "$C_RESET" "$overlay_count"
 
-if ((overlay_count == 0)); then
-  printf '  %b(no overlays applied)%b\n' "$C_DIM" "$C_RESET"
-  exit 0
-fi
+printf '%battribute:%b %s\n' "$C_BOLD" "$C_RESET" "$path"
+printf '%btarget:%b    %s\n' "$C_BOLD" "$C_RESET" "$flake_target"
+printf '%boverlays:%b  %d\n\n' "$C_BOLD" "$C_RESET" "$overlay_count"
 
-while IFS= read -r overlay; do
-  idx=$(jq -r '.index' <<< "$overlay")
-  ok=$(jq -r '.appliedOk' <<< "$overlay")
-  count=$(jq -r '.attributeCount' <<< "$overlay")
-  printf '  %boverlay %d%b' "$C_CYAN" "$idx" "$C_RESET"
-  if [[ "$ok" == "false" ]]; then
-    printf ' %b(evaluation failed; cannot enumerate attributes)%b\n' "$C_YELLOW" "$C_RESET"
-    continue
-  fi
-  printf '  %b%d attribute%s contributed%b\n' \
-    "$C_DIM" "$count" "$(((count == 1) ? "" : "s"))" "$C_RESET"
-  while IFS= read -r attr; do
-    printf '    - %s\n' "$attr"
-  done < <(jq -r --argjson lim "$attr_limit" '.attributes[0:$lim][]' <<< "$overlay")
-  if ((count > attr_limit)); then
-    printf '    %b...%d more (raise --limit to see)%b\n' "$C_DIM" "$((count - attr_limit))" "$C_RESET"
-  fi
-done < <(jq -c '.overlays[]' <<< "$ast_json")
+printf '%bHistory:%b\n' "$C_BOLD" "$C_RESET"
+baseline_sig=$(jq -c '.signatures[0]' <<< "$ast_json")
+printf '  %bbaseline%b                       %s\n' "$C_DIM" "$C_RESET" "$(format_sig "$baseline_sig")"
 
+idx=0
+while IFS= read -r diff; do
+  kind=$(jq -r '.kind' <<< "$diff")
+  curr_sig=$(jq -c ".signatures[$((idx + 1))]" <<< "$ast_json")
+  case "$kind" in
+    introduced)
+      marker="+"
+      color="$C_GREEN"
+      ;;
+    modified)
+      marker="~"
+      color="$C_MAGENTA"
+      ;;
+    removed)
+      marker="-"
+      color="$C_YELLOW"
+      ;;
+    *)
+      marker=" "
+      color="$C_DIM"
+      ;;
+  esac
+  printf '  %s %boverlay %-2d %-12s%b  %s\n' "$marker" "$color" "$idx" "$kind" "$C_RESET" "$(format_sig "$curr_sig")"
+  idx=$((idx + 1))
+done < <(jq -c '.diffs[]' <<< "$ast_json")
+
+echo
+printf '%bSummary:%b\n' "$C_BOLD" "$C_RESET"
+printf '  first appearance:   %s\n' "$(jq -r '.summary.firstAppearance' <<< "$ast_json")"
+printf '  last modification:  %s\n' "$(jq -r '.summary.lastModification' <<< "$ast_json")"
+printf '  total changes:      %s\n' "$(jq -r '.summary.changeCount' <<< "$ast_json")"
+printf '  final state:        %s\n' "$(jq -r '.summary.finalKind' <<< "$ast_json")"
+
+final_kind="$(printf '%s' "$ast_json" | jq -r '.summary.finalKind // "missing"')"
+[[ "$final_kind" == "missing" ]] && exit 1
 exit 0

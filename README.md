@@ -31,7 +31,8 @@ Documentation is local-only under `docs/` while the design stabilises.
 |---|---|
 | `nix-why-conflict <target> <option>` | Print only the merge-conflict block for an option. Exit 0 if clean, 1 if conflicts found. |
 | `nix-why-recursion < trace.log` | Read a Nix `--show-trace` capture from stdin, surface the infinite-recursion cycle (last frames + frequency table). |
-| `nix-why-overlay <target>` | List the nixpkgs overlays applied to a flake target and the attributes each contributes (MVP - per-attribute attribution comes later). |
+| `nix-why-overlay <target>` | List the nixpkgs overlays applied to a flake target and the attributes each contributes. |
+| `nix-why-overlay <target> <attr-path>` | Attribute attribution: fold overlays against a baseline `nixpkgs` and report which overlay introduced / modified the attribute. |
 
 ## Example: resolve
 

@@ -216,7 +216,6 @@ if [[ "$subcommand" == "eval" ]]; then
   # to eval.nix - which imports it. This avoids interpolating
   # arbitrary user-supplied Nix into a shell heredoc.
   user_expr_file="$(mktemp --suffix=.nix)"
-  trap 'rm -f "${user_expr_file}"' EXIT
   printf '%s\n' "$user_expr" > "${user_expr_file}"
 
   nix_eval_args=(
@@ -257,10 +256,13 @@ fi
 ast_json=""
 nix_stderr=""
 nix_rc=0
+# mktemp (not a predictable /tmp/...$$) for the captured nix stderr; one
+# trap cleans it plus the eval-subcommand expr file. :- tolerates unset.
+nix_stderr_file="$(mktemp --suffix=.nix-why-stderr)"
+trap 'rm -f "${user_expr_file:-}" "${nix_stderr_file:-}" 2>/dev/null' EXIT
 {
-  ast_json="$(nix-instantiate "${nix_eval_args[@]}" 2> /tmp/nix-why-option.stderr.$$)" || nix_rc=$?
-  nix_stderr="$(cat /tmp/nix-why-option.stderr.$$)"
-  rm -f /tmp/nix-why-option.stderr.$$
+  ast_json="$(nix-instantiate "${nix_eval_args[@]}" 2> "${nix_stderr_file}")" || nix_rc=$?
+  nix_stderr="$(cat "${nix_stderr_file}")"
 }
 
 if ((nix_rc != 0)); then

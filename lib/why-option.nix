@@ -215,6 +215,10 @@ rec {
         winningPriority
         declarations
         ;
+      # Label for the winning priority, from the single source
+      # (priority.nix). Lets the renderer drop its duplicate bash table.
+      winningPriorityKind =
+        if surface.winningPriority == null then null else internal.labelFor surface.winningPriority;
       valueError = surface.valueError or null;
       definitions = mergedDefinitions;
       inherit conflicts;

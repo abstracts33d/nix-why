@@ -327,30 +327,22 @@ fi
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-# Pretty-print a definition's priorityKind: prefers the AST-provided
-# label (from module-walk), falls back to deriving from the numeric
-# priority when module-walk was unavailable.
+# Pretty-print a priority kind. The number->label map lives ONLY in the
+# lib (lib/internal/priority.nix); the AST carries the resolved label as
+# priorityKind / winningPriorityKind. This renderer never re-implements
+# that table - it uses the AST label, and the inline fallback below
+# mirrors only labelFor's generic default for an unnamed priority (used
+# in the rare case the AST omitted a label).
 kind_label() {
   local from_ast="$1"
   local prio="$2"
   if [[ -n "$from_ast" && "$from_ast" != "null" ]]; then
     printf '%s' "$from_ast"
+  elif [[ -z "$prio" || "$prio" == "null" ]]; then
+    printf 'unknown'
   else
-    printf '%s' "$(priority_label "$prio")"
+    printf 'mkOverride %s' "$prio"
   fi
-}
-
-priority_label() {
-  case "$1" in
-    10) echo "mkVMOverride" ;;
-    50) echo "mkForce" ;;
-    60) echo "mkImageMediaOverride" ;;
-    100) echo "default" ;;
-    1000) echo "mkDefault" ;;
-    1500) echo "mkOptionDefault" ;;
-    null) echo "unknown" ;;
-    *) echo "mkOverride $1" ;;
-  esac
 }
 
 # Render a JSON value for human consumption. Strings get their quotes
@@ -407,11 +399,12 @@ render_conflict() {
 render_tree() {
   local ast="$1"
 
-  local path type isDefined winningPriority def_count valueError conflict_count
+  local path type isDefined winningPriority winningPriorityKind def_count valueError conflict_count
   path=$(jq -r '.path' <<< "$ast")
   type=$(jq -r '.type // "unknown"' <<< "$ast")
   isDefined=$(jq -r '.isDefined' <<< "$ast")
   winningPriority=$(jq -r '.winningPriority // empty' <<< "$ast")
+  winningPriorityKind=$(jq -r '.winningPriorityKind // empty' <<< "$ast")
   def_count=$(jq -r '.definitions | length' <<< "$ast")
   valueError=$(jq -r '.valueError // empty' <<< "$ast")
   conflict_count=$(jq -r '.conflicts | length' <<< "$ast")
@@ -454,7 +447,7 @@ render_tree() {
   # Definitions header
   if [[ -n "$winningPriority" ]]; then
     local winning_label
-    winning_label="$(priority_label "$winningPriority")"
+    winning_label="$(kind_label "$winningPriorityKind" "$winningPriority")"
     printf '  %d definitions, winning priority %s (%s):\n\n' "$def_count" "$winningPriority" "$winning_label"
   else
     printf '  %d definitions:\n\n' "$def_count"
@@ -683,7 +676,11 @@ render_why_not() {
       "$C_YELLOW" "$C_RESET"
     if ((default_count > 0)); then
       echo
-      printf '  Type default (priority 1500):\n'
+      # Priority read from the AST, not hardcoded: the type default is
+      # mkOptionDefault, but the number's single source is the lib.
+      local default_prio
+      default_prio=$(jq -r '.defaultDefinitions[0].priority // "?"' <<< "$ast")
+      printf '  Type default (priority %s):\n' "$default_prio"
       while IFS= read -r d; do render_def_line "$d"; done < <(jq -c '.defaultDefinitions[]' <<< "$ast")
     fi
     if ((filtered_count > 0)); then

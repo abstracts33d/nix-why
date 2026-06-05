@@ -421,11 +421,52 @@ let
     inherit (t) passed;
   }) sourceTests;
 
-  results = fixtureResults ++ v03Results ++ v04Results ++ driftResults ++ sourceResults;
+  # #10: priority labels come from the single lib source (priority.nix)
+  # on the options-surface path too - not just the module-walk - and the
+  # option-level winningPriorityKind is emitted. Pins the SSOT so the
+  # deleted bash priority_label table stays deleted.
+  ssotTests =
+    let
+      mods = [
+        {
+          options.foo.enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "ssot";
+          };
+        }
+        { config.foo.enable = lib.mkDefault true; }
+      ];
+      ev = lib.evalModules { modules = mods ++ [ permissive ]; };
+      # modules = [] forces the options-surface path (no module-walk).
+      r = nixWhy.resolve {
+        modules = [ ];
+        inherit (ev) options config;
+        path = "foo.enable";
+      };
+    in
+    [
+      {
+        name = "ssot-winning-priority-kind";
+        passed = r.winningPriorityKind == "mkDefault";
+      }
+      {
+        name = "ssot-options-surface-priority-kind";
+        passed = r.definitions != [ ] && builtins.all (d: d.priorityKind == "mkDefault") r.definitions;
+      }
+    ];
+
+  ssotResults = map (t: {
+    inherit (t) name;
+    inherit (t) passed;
+  }) ssotTests;
+
+  results =
+    fixtureResults ++ v03Results ++ v04Results ++ driftResults ++ sourceResults ++ ssotResults;
   failures = builtins.filter (r: !r.passed) results;
 in
 {
   inherit results failures;
   pass = failures == [ ];
-  summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline + ${toString (builtins.length v04Results)} v0.4 inline + ${toString (builtins.length driftResults)} drift-guard + ${toString (builtins.length sourceResults)} source-parse), ${toString (builtins.length failures)} failed";
+  summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline + ${toString (builtins.length v04Results)} v0.4 inline + ${toString (builtins.length driftResults)} drift-guard + ${toString (builtins.length sourceResults)} source-parse + ${toString (builtins.length ssotResults)} ssot), ${toString (builtins.length failures)} failed";
 }

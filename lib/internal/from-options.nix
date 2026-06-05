@@ -1,6 +1,7 @@
 { lib }:
 let
   submodulePivot = import ./submodule-pivot.nix { inherit lib; };
+  priority = import ./priority.nix { inherit lib; };
 
   # Walk the options tree one path component at a time, pivoting
   # through submodule boundaries when encountered.
@@ -122,7 +123,10 @@ let
       file = def.file or null;
       line = null;
       priority = prio;
-      priorityKind = null;
+      # Label via the single source (priority.nix), not null: the
+      # options-surface path knows the winning priority number, so it
+      # can name its kind. Per-def line/guard still need the module-walk.
+      priorityKind = if prio == null then null else priority.labelFor prio;
       guardedBy = null;
       value = def.value or null;
       wins = true;

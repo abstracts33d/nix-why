@@ -44,8 +44,9 @@ Emitted by the default subcommand and by `eval`.
 | `value` | any | Final merged value, or `null` if `valueError` |
 | `valueError` | string \| null | Set when evaluation of the value failed |
 | `winningPriority` | int \| null | Priority of the winning definition |
+| `winningPriorityKind` | string \| null | Label for the winning priority (`mkDefault`/`mkForce`/…), from the lib's single priority table |
 | `isDefined` | bool | True if the option has at least one definition |
-| `moduleWalkAvailable` | bool | True only when the raw module-walk ran (`--full`). The default options-surface output sets it false; `definitions[].line`/`priorityKind` are then null. |
+| `moduleWalkAvailable` | bool | True only when the raw module-walk ran (`--full`). The default options-surface output sets it false; `definitions[].line` and mkIf guards are then null, but `priority`/`priorityKind` are still populated from the winning priority. |
 | `declarations[]` | object | `{ file, line, column }` for each declaration |
 | `definitions[]` | object | `{ file, line, priority, priorityKind, value, wins, guardedBy }` |
 | `conflicts[]` | object | Populated only when merge fails |

@@ -1,5 +1,12 @@
 { lib }:
 let
+  # COUPLING: the `_type` markers ("if"/"override"/"merge") and their
+  # field names (.condition/.content/.priority/.contents) below are
+  # nixpkgs module-system internals. They are pinned against the live
+  # lib by the drift-guard in tests/lib.nix; a rename fails there loudly
+  # rather than silently degrading the walk. Removing this shadow
+  # re-implementation is RFC #2's goal.
+  #
   # The recursive worker. Unwraps _type markers as it encounters them
   # (carrying their information into `ctx`), then descends one path
   # component at a time using `unsafeGetAttrPos` for line tracking.

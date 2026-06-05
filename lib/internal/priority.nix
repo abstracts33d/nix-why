@@ -4,6 +4,9 @@ let
   # the merge. The "default" label corresponds to a value with no
   # priority wrapper (i.e. plain `option = value`), which evaluates with
   # priority 100.
+  # COUPLING: these numbers are a nixpkgs internal. They are pinned
+  # against the live lib by the drift-guard in tests/lib.nix; a renumber
+  # fails there loudly. Removing this shadow coupling is RFC #2's goal.
   named = {
     "10" = "mkVMOverride";
     "50" = "mkForce";

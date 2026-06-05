@@ -269,11 +269,86 @@ let
     inherit (t) passed;
   }) v04Tests;
 
-  results = fixtureResults ++ v03Results ++ v04Results;
+  # Drift guard. The walker (lib/internal/walker.nix) hardcodes the
+  # module-system `_type` markers and their field names; the priority
+  # table (lib/internal/priority.nix) hardcodes the priority numbers.
+  # Both are nixpkgs internals (`builtins.unsafeGetAttrPos`-adjacent,
+  # unstable). These assertions pin them against the LIVE nixpkgs lib so
+  # a release that renames a marker or renumbers a priority fails LOUDLY
+  # here instead of silently degrading the module-walk. This coupling is
+  # what RFC #2 (native provenance) would remove; until then this guard
+  # is the early-warning. See lib/internal/{walker,priority}.nix.
+  driftTests =
+    let
+      prioModules = [
+        {
+          options.x = lib.mkOption {
+            type = lib.types.int;
+            default = 0;
+            description = "drift";
+          };
+        }
+        { config.x = 1; } # plain, unwrapped -> module-system default priority
+      ];
+      prioEval = lib.evalModules { modules = prioModules ++ [ permissive ]; };
+      plainWinningPriority =
+        (nixWhy.resolve {
+          modules = prioModules;
+          inherit (prioEval) options config;
+          path = "x";
+        }).winningPriority;
+    in
+    [
+      {
+        name = "drift-type-if";
+        passed =
+          (lib.mkIf true 1)._type == "if" && (lib.mkIf true 1) ? condition && (lib.mkIf true 1) ? content;
+      }
+      {
+        name = "drift-type-override";
+        passed =
+          (lib.mkForce 1)._type == "override" && (lib.mkForce 1) ? priority && (lib.mkForce 1) ? content;
+      }
+      {
+        name = "drift-type-merge";
+        passed = (lib.mkMerge [ 1 ])._type == "merge" && (lib.mkMerge [ 1 ]) ? contents;
+      }
+      {
+        name = "drift-prio-mkVMOverride-10";
+        passed = (lib.mkVMOverride 1).priority == 10;
+      }
+      {
+        name = "drift-prio-mkForce-50";
+        passed = (lib.mkForce 1).priority == 50;
+      }
+      {
+        name = "drift-prio-mkImageMediaOverride-60";
+        passed = (lib.mkImageMediaOverride 1).priority == 60;
+      }
+      {
+        name = "drift-prio-default-100";
+        passed = plainWinningPriority == 100;
+      }
+      {
+        name = "drift-prio-mkDefault-1000";
+        passed = (lib.mkDefault 1).priority == 1000;
+      }
+      {
+        name = "drift-prio-mkOptionDefault-1500";
+        passed = (lib.mkOptionDefault 1).priority == 1500;
+      }
+    ];
+
+  driftResults = map (t: {
+    inherit (t) name;
+    inherit (t) passed;
+  }) driftTests;
+
+  results = fixtureResults ++ v03Results ++ v04Results ++ driftResults;
   failures = builtins.filter (r: !r.passed) results;
 in
 {
   inherit results failures;
   pass = failures == [ ];
-  summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline + ${toString (builtins.length v04Results)} v0.4 inline), ${toString (builtins.length failures)} failed";
+  summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline + ${toString (builtins.length v04Results)} v0.4 inline + ${toString (builtins.length driftResults)} drift-guard), ${toString (builtins.length failures)} failed";
 }

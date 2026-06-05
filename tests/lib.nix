@@ -4,6 +4,9 @@
 let
   inherit (pkgs) lib;
   nixWhy = import ../lib { inherit lib; };
+  # Internal: the source-text extractor, tested directly in the #6
+  # parser regression set below (it is not part of the public API).
+  nixSource = import ../lib/internal/nix-source.nix { inherit lib; };
 
   # Common module disabling _module.check so intentionally-invalid
   # fixtures (type-mismatch, mkforce-collision) can be evaluated lazily
@@ -344,11 +347,85 @@ let
     inherit (t) passed;
   }) driftTests;
 
-  results = fixtureResults ++ v03Results ++ v04Results ++ driftResults;
+  # #6: nix-source parser regression + graceful-fallback guard. The
+  # extractor (lib/internal/nix-source.nix) is best-effort: a hand-rolled
+  # bracket matcher over readFile'd module source, riding the unstable
+  # builtins.unsafeGetAttrPos. These pin its output on committed real
+  # source samples and confirm it returns null (never throws) on the
+  # absent / unreadable cases - including a missing file, which
+  # builtins.tryEval alone does NOT guard (hence the pathExists gate).
+  sourceTests =
+    let
+      extract = nixSource.extractMkIfCondition;
+      sample = name: ./fixtures/source-samples + "/${name}.nix";
+    in
+    [
+      {
+        name = "source-paren-condition";
+        passed =
+          extract {
+            file = sample "paren";
+            line = 1;
+            column = 1;
+          } == "config.foo && config.bar";
+      }
+      {
+        name = "source-dotted-condition";
+        passed =
+          extract {
+            file = sample "dotted";
+            line = 1;
+            column = 1;
+          } == "config.feature.enabled";
+      }
+      {
+        name = "source-no-mkif-null";
+        passed =
+          extract {
+            file = sample "no-mkif";
+            line = 1;
+            column = 1;
+          } == null;
+      }
+      {
+        name = "source-null-file-null";
+        passed =
+          extract {
+            file = null;
+            line = 1;
+            column = 1;
+          } == null;
+      }
+      {
+        name = "source-null-position-null";
+        passed =
+          extract {
+            file = sample "paren";
+            line = null;
+            column = null;
+          } == null;
+      }
+      {
+        name = "source-missing-file-null";
+        passed =
+          extract {
+            file = sample "does-not-exist";
+            line = 1;
+            column = 1;
+          } == null;
+      }
+    ];
+
+  sourceResults = map (t: {
+    inherit (t) name;
+    inherit (t) passed;
+  }) sourceTests;
+
+  results = fixtureResults ++ v03Results ++ v04Results ++ driftResults ++ sourceResults;
   failures = builtins.filter (r: !r.passed) results;
 in
 {
   inherit results failures;
   pass = failures == [ ];
-  summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline + ${toString (builtins.length v04Results)} v0.4 inline + ${toString (builtins.length driftResults)} drift-guard), ${toString (builtins.length failures)} failed";
+  summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline + ${toString (builtins.length v04Results)} v0.4 inline + ${toString (builtins.length driftResults)} drift-guard + ${toString (builtins.length sourceResults)} source-parse), ${toString (builtins.length failures)} failed";
 }

@@ -80,8 +80,9 @@ let
       else
         let
           sub = value.${head};
-          # unsafeGetAttrPos returns null for synthetic (compound-syntax)
-          # attributes. Carry the previous known position when null.
+          # unsafeGetAttrPos is an explicitly UNSTABLE builtin and
+          # returns null for synthetic (compound-syntax) attributes.
+          # Carry the previous known position when null; never throw.
           subPos = builtins.unsafeGetAttrPos head value;
           effectivePos = if subPos == null then pos else subPos;
         in

@@ -98,10 +98,16 @@ let
         in
         if end == 0 then null else builtins.substring 0 end str;
 
+  # Read a file, returning null instead of throwing on any failure.
+  # builtins.tryEval does NOT catch builtins.readFile's "No such file"
+  # IO error (same tryEval gap as missing-argument errors), so guard
+  # with pathExists FIRST; tryEval then covers restricted/pure-eval
+  # "access forbidden" throws. Without the pathExists guard a stale
+  # source position (file since deleted/moved) would crash the walk.
   tryReadFile =
     file:
     let
-      tried = builtins.tryEval (builtins.readFile file);
+      tried = builtins.tryEval (if builtins.pathExists file then builtins.readFile file else null);
     in
     if tried.success then tried.value else null;
 in
@@ -117,6 +123,16 @@ in
   #   - position cannot be located
   #   - no `mkIf` token found near the position
   #   - the condition expression is too complex for the parser
+  #
+  # LIMITATIONS (regression-tested in tests/lib.nix source-parse set):
+  #   - Positions come from builtins.unsafeGetAttrPos, an explicitly
+  #     UNSTABLE builtin. Under pure/restricted eval readFile is gated
+  #     (pathExists + tryEval) so this degrades to null, not a throw.
+  #   - The matcher is textual and best-effort: it keys off the FIRST
+  #     `mkIf` token at/after the position, so a literal `mkIf` in a
+  #     comment or string before the real guard will mislead it. This
+  #     fragility is why provenance is opt-in (--full) and why native
+  #     module-system provenance (RFC #2) is the durable fix.
   extractMkIfCondition =
     {
       file,

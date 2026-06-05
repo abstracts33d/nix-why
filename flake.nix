@@ -112,6 +112,17 @@
       #   inputs.nix-why.lib.resolve { options, modules, path, ... }
       lib = import ./lib { inherit (nixpkgs) lib; };
 
+      # Consumer-facing overlay: adds the four CLIs to a nixpkgs instance so
+      # downstream flakes (fleet dev hosts) get `pkgs.nix-why-option` etc.
+      # without referencing per-system `packages`. Built from `final` so the
+      # CLIs resolve deps through the consumer's package set.
+      overlays.default = final: _prev: {
+        nix-why-option = mkNixWhyOption final;
+        nix-why-conflict = mkNixWhyConflict final;
+        nix-why-recursion = mkNixWhyRecursion final;
+        nix-why-overlay = mkNixWhyOverlay final;
+      };
+
       packages = eachSystem (system: rec {
         nix-why-option = mkNixWhyOption (pkgsFor system);
         nix-why-conflict = mkNixWhyConflict (pkgsFor system);

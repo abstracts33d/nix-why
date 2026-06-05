@@ -94,6 +94,10 @@ nix profile install github:abstracts33d/nix-why
 inputs.nix-why.url = "github:abstracts33d/nix-why";
 # then in your NixOS / nix-darwin / home-manager config:
 environment.systemPackages = [ inputs.nix-why.packages.${system}.default ];
+
+# Or apply the overlay to get pkgs.nix-why-option (+ siblings) everywhere:
+nixpkgs.overlays = [ inputs.nix-why.overlays.default ];
+environment.systemPackages = [ pkgs.nix-why-option ];
 ```
 
 ## Library

@@ -6,8 +6,10 @@ result-*
 *.swp
 .DS_Store
 
-# Keep design + roadmap docs local for now
-docs/
+# Design + roadmap docs stay local; docs/reference/ is the public contract
+# (JSON schema + man pages) advertised by the lib/CLI and must ship.
+docs/*
+!docs/reference
 
 # Local-only future-work tracker
 TODO.md

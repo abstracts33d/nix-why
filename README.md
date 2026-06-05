@@ -116,19 +116,35 @@ inputs.nix-why.lib.adapters.adapt { name ? null, flakeOutput }
 The library is the strategic asset; the bash CLI is a thin renderer
 over its JSON output.
 
-## Opt-in: full module-walk fidelity
+## Provenance fidelity
 
-By default the library degrades gracefully to options-surface fidelity
-because NixOS / home-manager / nix-darwin do not expose the raw modules
-list. To enable full per-definition line numbers and mkIf source
-extraction, opt in by setting in your config:
+Two tiers, drawn by what the module system exposes natively:
 
-```nix
-_module.args.modules = <the same modules list passed to nixosSystem/lib.evalModules>;
+| | Always available (any unmodified config) | Needs the raw module list |
+|---|---|---|
+| Per definition | file | line, priority kind, mkIf guard source |
+| Whole option | winning value, winning priority, type, declaration file:line | mkIf-filtered candidates ("would have set it") |
+
+The left column is the **default** on any config: read from the
+evaluated `options` tree (NixOS-native, import-aware), no configuration
+change, never fails.
+
+The right column needs a raw module-walk, opted into with `--full`:
+
+```sh
+nix-why-option --full .#nixosConfigurations.krach services.openssh.enable
 ```
 
-The library reads this from the evaluated config and feeds it to the
-module-walk introspection pass.
+`--full` is best-effort. It resolves for **flat** module lists, but
+degrades (or errors) on deeply imported configurations — most real
+NixOS systems — because the module system exposes neither the
+transitively-imported module list, nor per-definition positions, nor
+mkIf-filtered candidates, and re-running raw modules outside their
+evaluation throws uncatchably when they need unavailable `specialArgs`.
+nix-why does not re-implement the module system's collection internals
+to force this. Closing the gap natively — so every config gets full
+provenance without reconstruction — is the upstream goal (a
+module-system RFC); nix-why is the proof of need.
 
 ## Exit codes
 

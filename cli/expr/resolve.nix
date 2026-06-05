@@ -20,6 +20,7 @@
   searchLimit ? "50",
   adapterName ? "",
   mode ? "resolve",
+  walkModules ? "0",
 }:
 let
   inherit ((import <nixpkgs> { })) lib;
@@ -34,6 +35,13 @@ let
     flakeOutput = target;
   };
 
+  # Default: options-surface only (modules = []) - robust, never applies
+  # raw modules, so it cannot hit the uncatchable "missing required
+  # argument" crash that walking specialArgs-dependent modules triggers.
+  # `--full` (walkModules) opts into the raw module-walk for richer
+  # per-definition provenance; best-effort, may error on deep configs.
+  walkList = if walkModules == "1" then adapted.modules else [ ];
+
   result =
     if mode == "search" then
       nixWhy.search {
@@ -43,17 +51,20 @@ let
       }
     else if mode == "whatSets" then
       nixWhy.whatSets {
-        inherit (adapted) modules options config;
+        inherit (adapted) options config;
+        modules = walkList;
         path = optionPath;
       }
     else if mode == "whyNot" then
       nixWhy.whyNot {
-        inherit (adapted) modules options config;
+        inherit (adapted) options config;
+        modules = walkList;
         path = optionPath;
       }
     else
       nixWhy.resolve {
-        inherit (adapted) modules options config;
+        inherit (adapted) options config;
+        modules = walkList;
         path = optionPath;
       };
 in

@@ -101,6 +101,14 @@ rec {
     guard records). `moduleWalkAvailable` in the result indicates
     which mode was used.
 
+    Module-walk resolves only for FLAT module lists. Deeply imported
+    configurations degrade even with `_module.args.modules` set: the
+    recovered top-level list does not carry transitively imported
+    definitions, and the module system exposes neither per-definition
+    positions nor mkIf-filtered candidates natively. Closing that gap
+    natively is the upstream-RFC target; the walk is not extended to
+    re-implement `collectModules` (that coupling is a non-goal).
+
     # Inputs
 
     `modules`

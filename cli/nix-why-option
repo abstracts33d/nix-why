@@ -68,6 +68,11 @@ Flags:
   --show-trace        Pass through to nix eval for debugging the tool itself
   --verbose           Show informational notices (e.g. module-walk
                       opt-in tips). Silent by default.
+  --full              Opt into the raw module-walk for per-definition line
+                      numbers, priority kind, and mkIf-filtered candidates.
+                      Best-effort: may not resolve (or may error) on configs
+                      whose modules need specialArgs (deep real-world configs);
+                      the default options-surface output is always available.
   --adapter <name>    Force a specific adapter
                       (nixos | home-manager | nix-darwin | flake-parts | raw)
   --limit N           (search only) cap on the number of matches
@@ -92,6 +97,7 @@ no_color=0
 show_trace=0
 search_limit=50
 verbose=0
+full=0
 positional=()
 
 # Color autodetect: disabled if NO_COLOR is set or stdout is not a TTY.
@@ -114,6 +120,7 @@ while (($# > 0)); do
       ;;
     --show-trace) show_trace=1; shift ;;
     --verbose) verbose=1; shift ;;
+    --full) full=1; shift ;;
     --limit)
       search_limit="$2"
       shift 2
@@ -243,6 +250,7 @@ else
     --argstr searchLimit "${search_limit}"
     --argstr adapterName "${adapter_name}"
     --argstr mode "${library_fn}"
+    --argstr walkModules "${full}"
     "${NIX_WHY_CLI_EXPR_DIR}/resolve.nix"
   )
 fi
@@ -742,9 +750,11 @@ esac
 if ((verbose)) \
   && [[ "$subcommand" != "search" ]] \
   && [[ "$(printf '%s' "$ast_json" | jq -r '.moduleWalkAvailable')" == "false" ]]; then
-  echo "note: nix-why-option: module-walk introspection unavailable" >&2
-  echo "      (per-definition priorities and line numbers will be missing)" >&2
-  echo "      opt-in: set _module.args.modules = <your module list> in your config" >&2
+  echo "note: nix-why-option: options-surface fidelity (file, winning priority, value)." >&2
+  echo "      Per-definition line/priority-kind and mkIf-filtered candidates need the raw" >&2
+  echo "      module-walk: re-run with --full. Best-effort - the module system does not" >&2
+  echo "      expose this natively, so --full resolves for flat configs but may not for" >&2
+  echo "      deep ones. See README 'Provenance fidelity'." >&2
 fi
 
 # Exit code: search is 0 if any matches, otherwise treat as not-found.

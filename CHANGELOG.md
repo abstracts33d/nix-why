@@ -35,8 +35,7 @@ Four deferred items from the original brainstorm are now shipped:
   tree renderer prints them on a `changed fields:` line under the
   modified overlay's entry.
 
-Documented in docs/roadmap/v0.5-overlay-attribution.md (Limitations
-section).
+See the v0.5 overlay-attribution limitations.
 
 - **Submodule traversal** (lib): paths that cross
   `lib.types.submodule` boundaries (e.g. `services.foo.enable` where
@@ -92,7 +91,7 @@ Added:
 - Exit code 1 when the attribute never appears in any overlay step.
 - Exit code 3 when the baseline nixpkgs source cannot be located
   (target's pkgs lacks `pkgs.path`).
-- Documented at docs/roadmap/v0.5-overlay-attribution.md.
+- Documented in the v0.5 overlay-attribution notes.
 
 The v0.4 listing mode (no attr-path) is unchanged.
 

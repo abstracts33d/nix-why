@@ -10,6 +10,7 @@ result-*
 # (JSON schema + man pages) advertised by the lib/CLI and must ship.
 docs/*
 !docs/reference
+!docs/comparison.md
 
 # Local-only future-work tracker
 TODO.md

@@ -223,7 +223,7 @@ if [[ -n "$last_frames_tsv" ]]; then
 fi
 echo
 
-printf '%bMost frequent frames%b %b(top %d)%b%b - likely cycle:%b\n' \
+printf '%bMost frequent frames%b %b(top %d)%b - likely cycle:%b\n' \
   "$C_BOLD" "$C_RESET" "$C_DIM" "$limit" "$C_RESET" "$C_RESET"
 if [[ -n "$top_frames_tsv" ]]; then
   printf '%s\n' "$top_frames_tsv" | awk -F'\t' -v cyellow="$C_YELLOW" -v creset="$C_RESET" -v ccyan="$C_CYAN" '

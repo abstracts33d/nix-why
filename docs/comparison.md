@@ -5,20 +5,27 @@ Nix-debugging toolbox, and where it deliberately doesn't.
 
 ## TL;DR table
 
-| Capability | `nixos-option` | `nix repl :p` | `nix eval --show-trace` | `manix` | `nix-doc` | `nix-tree` | `nix why-depends` | **nix-why-option** |
-|---|---|---|---|---|---|---|---|---|
-| Final value of an option | ✓ | ✓ | partial | ✗ | ✗ | ✗ | ✗ | **✓** |
-| Per-definition file:line | partial | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **✓** |
-| Priority kind (mkForce / mkDefault / …) | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **✓** |
-| `mkIf` guard recovery | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **✓** |
-| "Why is this not set?" | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **✓** (`why-not`) |
-| Merge-conflict diagnostic | partial | ✗ | partial | ✗ | ✗ | ✗ | ✗ | **✓** (`nix-why-conflict`) |
-| Overlay attribution | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | **✓** (`nix-why-overlay`) |
-| Reverse lookup (what sets X) | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **✓** (`what-sets`) |
-| Fuzzy option search | partial | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ | **✓** (`search`) |
-| Module-system aware | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **✓** |
-| Stable JSON output | ✗ | ✗ | ✗ | ✗ | ✗ | partial | ✗ | **✓** (`schemaVersion`) |
-| Pure Nix lib (no CLI shim) | ✗ | n/a | n/a | ✗ | ✗ | ✗ | ✗ | **✓** |
+| Capability | `nixos-option` | `definitionsWithLocations` | `nix repl :p` | `nix eval --show-trace` | `manix` | `nix-doc` | `nix-tree` | `nix why-depends` | **nix-why-option** |
+|---|---|---|---|---|---|---|---|---|---|
+| Final value of an option | ✓ | ✗ | ✓ | partial | ✗ | ✗ | ✗ | ✗ | **✓** |
+| Per-definition file | partial | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **✓** |
+| Per-definition line | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **✓** (`--full`)¹ |
+| Priority kind (mkForce / mkDefault / …) | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **✓**¹ |
+| `mkIf` guard recovery | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **✓** (`--full`)¹ |
+| "Why is this not set?" | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **✓** (`why-not`) |
+| Merge-conflict diagnostic | partial | ✗ | ✗ | partial | ✗ | ✗ | ✗ | ✗ | **✓** (`nix-why-conflict`) |
+| Overlay attribution | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **✓** (`nix-why-overlay`) |
+| Reverse lookup (what sets X) | ✗ | partial | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **✓** (`what-sets`) |
+| Fuzzy option search | partial | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | **✓** (`search`) |
+| Module-system aware | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **✓** |
+| Stable JSON output | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | partial | ✗ | **✓** (`schemaVersion`) |
+| Pure Nix lib (no CLI shim) | ✗ | ✓ | n/a | n/a | ✗ | ✗ | ✗ | ✗ | **✓** |
+
+¹ The winning definition's priority kind is always reported.
+Per-definition line numbers, per-definition priority kinds, and
+`mkIf` guard sources need the raw module-walk (`--full`,
+best-effort on deeply imported configs) — see the README's
+"Provenance fidelity" section.
 
 ## Per-tool detail
 
@@ -26,7 +33,9 @@ Nix-debugging toolbox, and where it deliberately doesn't.
 
 The closest existing tool. Resolves an option against an evaluated
 NixOS configuration and prints the final value plus type +
-declarations.
+declarations. Rewritten as a Nix script (merged into nixpkgs
+January 2025); the rewrite also prints definition files via
+`definitionsWithLocations`, but still nothing below the file level.
 
 - **What it does well:** ubiquitous, ships in nixpkgs, no extra
   flake input.
@@ -48,6 +57,53 @@ declarations.
 nix-why-option is intended to supersede `nixos-option`'s diagnostic
 role on every dimension above, while keeping the same one-liner
 ergonomics for the common case.
+
+### `options.<path>.definitionsWithLocations`
+
+The strongest existing alternative, and not a tool at all: the
+module system itself exposes per-definition `{ file, value }`
+records on every evaluated option (in nixpkgs since 2022). A
+`nix repl` one-liner gets you the list of defining files:
+
+```
+nix-repl> :lf .
+nix-repl> nixosConfigurations.host.options.services.openssh.enable.definitionsWithLocations
+```
+
+- **What it does well:** zero install, authoritative (it is the
+  module system's own data), per-definition file + value.
+- **Where it falls short:** file only — no line numbers, no
+  priority kinds (values arrive post-`mkOverride`-strip), no `mkIf`
+  recovery (filtered definitions are already gone), no merge
+  diagnostics, interactive-only ergonomics, and you need to know
+  the incantation.
+
+nix-why's default options-surface mode is built on exactly this
+data; the tool packages it with priority/type/declaration context,
+exit codes, JSON, and the `--full` deep pass on top.
+
+### `nixd` / `nil` (language servers)
+
+Editor-side option support: hover documentation, goto-declaration
+for options, completion against an evaluated config (nixd).
+
+- **What they do well:** in-editor discovery while writing config.
+- **Where they fall short:** declaration-side, not value-side. They
+  answer "what is this option?" at edit time, not "why is it
+  `false` right now on this host?" against the deployed eval. No
+  merge/priority/conflict story, no scriptable output.
+
+Complementary: nix-why is the post-eval forensic counterpart.
+
+### `nix-inspect`
+
+TUI browser for evaluated Nix values (ratatui-based).
+
+- **What it does well:** interactive drill-down into a config's
+  value tree, faster than `nix repl` for exploration.
+- **Where it falls short:** value browsing only — shows what a
+  value *is*, not which module/priority/guard made it that. No
+  provenance, no JSON contract.
 
 ### `nix repl :p config.foo.bar`
 

@@ -6,6 +6,26 @@ uses semantic versioning.
 
 ## Unreleased
 
+### API surface corrections
+
+The milestone entries below describe the API as it was when each
+milestone landed; two pieces have since changed and the current
+surface is what `lib/default.nix` exports:
+
+- `lib.render` (the v0.1 stub) is removed from the public API;
+  rendering happens in the bash CLI over the `--json` AST.
+- `specialArgs` is no longer a parameter of `resolve` / `whatSets`;
+  module args are recovered from the evaluated `config` parameter
+  instead.
+- `whatSets` setters now carry `value`, matching the documented
+  `Setter` type and the JSON schema.
+- Driver expressions take `lib` from the target flake's own
+  `nixpkgs` input (fallback `<nixpkgs/lib>`), removing the hard
+  NIX_PATH dependency and the introspecting-lib version skew.
+- `nix-why-conflict` now uses the options-surface path by default,
+  like resolve - the unconditional module-walk crashed on flake
+  configs whose modules need `specialArgs`.
+
 ### Post-v0.5 polish
 
 Four deferred items from the original brainstorm are now shipped:

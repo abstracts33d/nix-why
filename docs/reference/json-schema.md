@@ -39,7 +39,7 @@ Emitted by the default subcommand and by `eval`.
 |---|---|---|
 | `schemaVersion` | string | `"1"` |
 | `path` | string | Dotted option path |
-| `kind` | `"option" \| "missing" \| ...` | Resolution category |
+| `kind` | `"option" \| "not-found" \| "not-an-option"` | Resolution category |
 | `type` | string | Nix option type description |
 | `value` | any | Final merged value, or `null` if `valueError` |
 | `valueError` | string \| null | Set when evaluation of the value failed |
@@ -57,7 +57,12 @@ Emitted by the default subcommand and by `eval`.
 |---|---|---|
 | `schemaVersion` | string | `"1"` |
 | `path` | string | Queried option path |
-| `setters[]` | object | `{ file, line, value, priority, priorityKind, wins }` |
+| `kind` | `"option" \| "not-found" \| "not-an-option"` | Resolution category |
+| `type` | string | Option type description |
+| `isDefined` | bool | True if the option has at least one definition |
+| `declarations[]` | object | `{ file, line, column }` for each declaration |
+| `setters[]` | object | `{ file, line, value, priority, priorityKind, guardedBy }`; `line` and `guardedBy` are null without the module-walk |
+| `moduleWalkAvailable` | bool | True only when the raw module-walk ran (`--full`) |
 
 ### `nix-why-option why-not`
 
@@ -86,7 +91,7 @@ out by an `mkIf`.
 | `schemaVersion` | string | `"1"` |
 | `pattern` | string | The query pattern |
 | `totalMatches` | int | Number of matches (may exceed truncated list) |
-| `matches[]` | object | `{ path, type, declarations }` |
+| `matches[]` | object | `{ path, type, declarations, isDefined }` |
 | `truncated` | bool | True when result list was capped by `--limit` |
 
 ### `nix-why-conflict`
@@ -172,11 +177,12 @@ fields are not guaranteed to exist (and vice versa).
 ### Special-case: `nix-why-overlay`
 
 The overlay tool surfaces discovery-level failures via the
-`error: string \| null` field in its normal output shape (see the
-listing / attribution sections above), rather than the unified
-envelope above. This is because discovery failures still produce a
-partially-populated response (e.g. `overlayCount`, `mode`). Eval-
-level failures still use the unified envelope.
+`error: string \| null` field rather than the unified envelope above.
+A discovery failure (overlays not located on the target) emits only
+`{ schemaVersion, error }`; an attribution-baseline failure emits
+`{ schemaVersion, mode, error }`. Consumers must treat every field
+except `schemaVersion` and `error` as optional when `error` is
+non-null. Eval-level failures still use the unified envelope.
 
 ### Usage-error exit (rc=64)
 

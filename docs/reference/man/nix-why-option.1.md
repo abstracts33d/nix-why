@@ -85,6 +85,12 @@ The flake target may use any of these forms:
     tool itself; ordinary failures are mapped to one-line
     actionable errors without needing this flag.
 
+**\--full**
+:   Opt into the raw module-walk for per-definition line numbers,
+    priority kinds, and `mkIf` guard sources. Best-effort: resolves
+    for flat module lists, degrades or errors on deeply imported
+    configurations (see **MODULE-WALK INTROSPECTION** below).
+
 **\--verbose**
 :   Emit informational notices (e.g. the module-walk opt-in tip).
     Silent by default.
@@ -143,18 +149,19 @@ schemas and the list of stable `error.kind` values.
 
 # MODULE-WALK INTROSPECTION (opt-in)
 
+The default output reads the evaluated `options` tree: per-definition
+file, winning value, winning priority and kind, type, and declaration
+file:line. This works on any unmodified configuration and never
+requires config changes.
+
 The richest output (per-definition line numbers, priority kinds,
-`mkIf` guards) requires the configuration to surface its raw
-modules list:
-
-```nix
-{ config._module.args.modules = <your modules list>; }
-```
-
-Without this, output falls back to options-surface fidelity:
-final value + type + declarations, but no per-definition
-provenance. `moduleWalkAvailable` in the JSON output indicates
-which mode produced the response.
+`mkIf` guard sources, and mkIf-filtered candidates) needs a raw
+module-walk, opted into with **\--full**. It is best-effort: it
+resolves for flat module lists but degrades or errors on deeply
+imported configurations, because the module system exposes neither
+the transitively-imported module list nor per-definition positions.
+`moduleWalkAvailable` in the JSON output indicates which mode
+produced the response.
 
 # ENVIRONMENT
 

@@ -23,11 +23,16 @@
   walkModules ? "0",
 }:
 let
-  inherit ((import <nixpkgs> { })) lib;
+  flake = builtins.getFlake flakeRef;
+
+  # Interpret the target with its own nixpkgs lib when it has one.
+  # Avoids version skew between the lib that built the config and the
+  # lib that introspects it, and keeps channel-less (flake-only) hosts
+  # working. <nixpkgs/lib> is the last-resort fallback only; the
+  # lib-only import skips instantiating the pkgs fixpoint.
+  lib = flake.inputs.nixpkgs.lib or (import <nixpkgs/lib>);
   nixWhy = import libPath { inherit lib; };
   common = import ./_common.nix { inherit lib; };
-
-  flake = builtins.getFlake flakeRef;
   target = common.resolveAttr flake attr;
 
   adapted = nixWhy.adapters.adapt {

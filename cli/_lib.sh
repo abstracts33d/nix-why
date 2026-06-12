@@ -9,9 +9,10 @@
 #   # shellcheck source=./_lib.sh
 #   source "${NIX_WHY_CLI_SH}"
 #
-# Functions defined here depend only on POSIX builtins + coreutils
-# (no GNU-specific behaviour). The caller is responsible for setting
-# `no_color` (int 0/1) before calling nix_why_init_colors.
+# Functions defined here depend only on POSIX builtins + coreutils,
+# with portable fallbacks where GNU and BSD tools diverge (realpath).
+# The caller is responsible for setting `no_color` (int 0/1) before
+# calling nix_why_init_colors.
 
 # Set up ANSI color variables based on $no_color (caller-set int).
 # Defines C_RESET / C_BOLD / C_DIM / C_GREEN / C_RED / C_CYAN /
@@ -62,7 +63,16 @@ absolutize_flake_ref() {
       printf '%s' "$ref"
       ;;
     *)
-      realpath -m -- "$ref"
+      # BSD realpath (macOS) has no -m and older macOS ships none at
+      # all; getFlake only needs an absolute path, not a canonical
+      # one, so a plain $PWD join is a sufficient fallback.
+      if ! realpath -m -- "$ref" 2> /dev/null; then
+        case "$ref" in
+          .) printf '%s' "$PWD" ;;
+          ./*) printf '%s/%s' "$PWD" "${ref#./}" ;;
+          *) printf '%s/%s' "$PWD" "$ref" ;;
+        esac
+      fi
       ;;
   esac
 }
@@ -81,6 +91,28 @@ split_flake_target() {
   fi
   [[ -z $flake_ref ]] && flake_ref="."
   flake_ref="$(absolutize_flake_ref "$flake_ref")"
+}
+
+# Guard a value-carrying flag: exit 64 with a usage message when the
+# value is missing. Call before reading $2:
+#   --limit) nix_why_require_arg nix-why-foo --limit $#; limit="$2"; shift 2 ;;
+nix_why_require_arg() {
+  local tool="$1" flag="$2" argc="$3"
+  if ((argc < 2)); then
+    echo "${tool}: ${flag} requires a value" >&2
+    exit 64
+  fi
+}
+
+# Validate that a flag value is a non-negative integer; exit 64
+# otherwise. Catches both `--limit abc` and `--limit=abc` after the
+# parse loop, before the value reaches arithmetic or `head -n`.
+nix_why_require_int() {
+  local tool="$1" flag="$2" value="$3"
+  if ! [[ $value =~ ^[0-9]+$ ]]; then
+    echo "${tool}: ${flag} expects a non-negative integer (got '${value}')" >&2
+    exit 64
+  fi
 }
 
 # "s"-suffix helper: empty for count==1, "s" otherwise. Bash's

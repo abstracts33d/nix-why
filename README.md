@@ -1,5 +1,8 @@
 # nix-why
 
+[![ci](https://github.com/abstracts33d/nix-why/actions/workflows/ci.yml/badge.svg)](https://github.com/abstracts33d/nix-why/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 > Why is this NixOS / home-manager / nix-darwin option set to this value?
 
 `nix-why` is an umbrella for small, focused tools that answer diagnostic
@@ -11,9 +14,12 @@ adjacent investigations.
 ## Status
 
 Pre-release. Library and CLI are functionally complete through the
-roadmap's v0.4 milestone (option resolution, conflict explanation,
-reverse lookup, search, "why is this not explicitly set?").
-Documentation is local-only under `docs/` while the design stabilises.
+roadmap's v0.5 milestone (option resolution, conflict explanation,
+reverse lookup, search, "why is this not explicitly set?", overlay
+attribution). The public contract lives under
+[`docs/reference/`](docs/reference/) (JSON schema + man pages);
+[`docs/comparison.md`](docs/comparison.md) maps nix-why against the
+existing tooling.
 
 ## `nix-why-option` subcommands
 
@@ -78,6 +84,8 @@ $ nix-why-option what-sets .#nixosConfigurations.krach services.openssh.enable
 | `--no-color` | Force-disable ANSI (also respects `NO_COLOR`). |
 | `--max-value N` | Truncate value rendering past N characters (default 200). |
 | `--show-trace` | Pass through to underlying `nix eval`. |
+| `--full` | Opt into the raw module-walk (per-definition line, priority kind, mkIf guard source). Best-effort; see "Provenance fidelity". |
+| `--verbose` | Emit informational notices (e.g. the module-walk opt-in tip). Silent by default. |
 | `--adapter <name>` | Force a specific adapter (`nixos` / `home-manager` / `nix-darwin` / `flake-parts` / `raw`). |
 | `--limit N` | (search only) Cap the result count. 0 disables truncation. Default 50. |
 

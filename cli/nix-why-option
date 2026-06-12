@@ -111,6 +111,7 @@ while (($# > 0)); do
     --brief | -b) format="brief"; shift ;;
     --no-color) no_color=1; shift ;;
     --max-value)
+      nix_why_require_arg nix-why-option --max-value $#
       max_value="$2"
       shift 2
       ;;
@@ -122,6 +123,7 @@ while (($# > 0)); do
     --verbose) verbose=1; shift ;;
     --full) full=1; shift ;;
     --limit)
+      nix_why_require_arg nix-why-option --limit $#
       search_limit="$2"
       shift 2
       ;;
@@ -130,6 +132,7 @@ while (($# > 0)); do
       shift
       ;;
     --adapter)
+      nix_why_require_arg nix-why-option --adapter $#
       adapter_name="$2"
       shift 2
       ;;
@@ -161,6 +164,9 @@ while (($# > 0)); do
       ;;
   esac
 done
+
+nix_why_require_int nix-why-option --max-value "$max_value"
+nix_why_require_int nix-why-option --limit "$search_limit"
 
 # Subcommand dispatch.
 subcommand=""
@@ -222,11 +228,13 @@ if [[ "$subcommand" == "eval" ]]; then
   # Write the user's Nix expression to a temp file and pass the path
   # to eval.nix - which imports it. This avoids interpolating
   # arbitrary user-supplied Nix into a shell heredoc.
-  user_expr_file="$(mktemp --suffix=.nix)"
+  # Plain mktemp: BSD/macOS mktemp has no --suffix.
+  user_expr_file="$(mktemp "${TMPDIR:-/tmp}/nix-why-expr.XXXXXX")"
   printf '%s\n' "$user_expr" > "${user_expr_file}"
 
   nix_eval_args=(
     --eval --strict --json --impure
+    --extra-experimental-features flakes
     --argstr libPath "${NIX_WHY_LIB}"
     --argstr userExprFile "${user_expr_file}"
     --argstr optionPath "${option_path}"
@@ -242,6 +250,7 @@ else
 
   nix_eval_args=(
     --eval --strict --json --impure
+    --extra-experimental-features flakes
     --argstr libPath "${NIX_WHY_LIB}"
     --argstr flakeRef "${flake_ref}"
     --argstr attr "${attr_expr}"
@@ -266,7 +275,8 @@ nix_stderr=""
 nix_rc=0
 # mktemp (not a predictable /tmp/...$$) for the captured nix stderr; one
 # trap cleans it plus the eval-subcommand expr file. :- tolerates unset.
-nix_stderr_file="$(mktemp --suffix=.nix-why-stderr)"
+# Plain mktemp template: BSD/macOS mktemp has no --suffix.
+nix_stderr_file="$(mktemp "${TMPDIR:-/tmp}/nix-why-stderr.XXXXXX")"
 trap 'rm -f "${user_expr_file:-}" "${nix_stderr_file:-}" 2>/dev/null' EXIT
 {
   ast_json="$(nix-instantiate "${nix_eval_args[@]}" 2> "${nix_stderr_file}")" || nix_rc=$?

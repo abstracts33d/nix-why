@@ -298,6 +298,7 @@ rec {
               line
               priorityKind
               guardedBy
+              value
               ;
             inherit (d) priority;
           }) moduleWalk.definitions
@@ -308,6 +309,7 @@ rec {
               priority
               priorityKind
               guardedBy
+              value
               ;
             line = null;
           }) surface.definitions;

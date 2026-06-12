@@ -83,3 +83,33 @@ setup() {
   run "${CLI}" --no-color --help
   [ "$status" -eq 0 ]
 }
+
+@test "argv: --adapter without a value -> exit 64, friendly message" {
+  run "${CLI}" --adapter
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"--adapter requires a value"* ]]
+}
+
+@test "argv: --max-value without a value -> exit 64, friendly message" {
+  run "${CLI}" --max-value
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"--max-value requires a value"* ]]
+}
+
+@test "argv: --limit without a value -> exit 64, friendly message" {
+  run "${CLI}" --limit
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"--limit requires a value"* ]]
+}
+
+@test "argv: non-numeric --max-value -> exit 64" {
+  run "${CLI}" --max-value=abc .#krach foo.bar
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"non-negative integer"* ]]
+}
+
+@test "argv: negative --limit -> exit 64" {
+  run "${CLI}" --limit=-3 .#krach foo.bar
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"non-negative integer"* ]]
+}

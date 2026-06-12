@@ -38,6 +38,12 @@ setup() {
   [ "$status" -eq 64 ]
 }
 
+@test "conflict --adapter without a value -> exit 64, friendly message" {
+  run "${CONFLICT}" --adapter
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"--adapter requires a value"* ]]
+}
+
 # --- nix-why-recursion -----------------------------------------------------
 
 @test "recursion --help exits 0" {
@@ -87,6 +93,18 @@ setup() {
   echo "$output" | jq -e '.topFrames | length > 0' > /dev/null
 }
 
+@test "recursion: --limit without a value -> exit 64, friendly message" {
+  run "${RECURSION}" --limit
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"--limit requires a value"* ]]
+}
+
+@test "recursion: non-numeric --limit -> exit 64 before reading stdin" {
+  run "${RECURSION}" --limit=abc
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"non-negative integer"* ]]
+}
+
 @test "recursion: positional arg rejected (input from stdin only)" {
   run bash -c "echo trace | '${RECURSION}' .#krach"
   [ "$status" -eq 64 ]
@@ -124,6 +142,18 @@ setup() {
   run "${OVERLAY}" .#krach attr1 attr2
   [ "$status" -eq 64 ]
   [[ "$output" == *"expected <flake-target>"* ]]
+}
+
+@test "overlay --limit without a value -> exit 64, friendly message" {
+  run "${OVERLAY}" --limit
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"--limit requires a value"* ]]
+}
+
+@test "overlay non-numeric --limit -> exit 64" {
+  run "${OVERLAY}" --limit=zz .#krach
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"non-negative integer"* ]]
 }
 
 @test "overlay unknown flag -> exit 64" {

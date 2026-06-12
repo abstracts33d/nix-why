@@ -153,8 +153,10 @@ else
 fi
 
 # gated.target has a filtered-out candidate, so this exits 0.
+# mkIf-filtered candidates need the module-walk (--full); the
+# synthetic flake's module list is flat, so the walk resolves.
 rc=0
-j="$($OPTION --json why-not "${SYNTHETIC}#test" gated.target 2> /dev/null)" || rc=$?
+j="$($OPTION --json --full why-not "${SYNTHETIC}#test" gated.target 2> /dev/null)" || rc=$?
 filtered="$(printf '%s' "$j" | jq -r '.filteredOutDefinitions | length' 2> /dev/null || echo 0)"
 if [[ $rc == 0 && $filtered -ge 1 ]]; then
   ok "why-not gated.target surfaces filtered-out definition"

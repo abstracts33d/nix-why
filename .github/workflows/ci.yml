@@ -3,22 +3,18 @@ name: ci
 # CI gates that must pass before any merge to main. Two pieces:
 #
 #   flake-check: per-system `nix flake check` (treefmt, lib-tests,
-#                cli-tests). The lib's evalModules-based tests don't
-#                build anything, so this stays fast across the matrix.
+#                cli-tests). lib-tests gate at eval time; cli-tests
+#                and treefmt are built derivations.
 #
 #   e2e-smoke:   end-to-end CLI exercise against the synthetic flake
-#                under tests/synthetic/. Runs on x86_64-linux only;
-#                the smoke test locks nixpkgs and cannot run in the
-#                Nix flake-check sandbox (which is why it is gated
-#                separately).
+#                under tests/synthetic/. The smoke test locks nixpkgs
+#                and cannot run in the Nix flake-check sandbox (which
+#                is why it is gated separately).
 #
 # Matrix coverage:
 #   x86_64-linux   (ubuntu-latest)   - primary; full check + e2e
 #   x86_64-darwin  (macos-13)        - flake-check only
-#   aarch64-darwin (macos-14)        - flake-check only
-#
-# aarch64-linux is not covered yet: GitHub-hosted ARM Linux runners
-# require billed accounts. Add when funding / self-hosting allows.
+#   aarch64-darwin (macos-14)        - flake-check + e2e (BSD userland)
 
 on:
   push:
@@ -46,18 +42,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
       - name: nix flake check
-        run: nix flake check --no-build --print-build-logs
+        # No --no-build: the cli-tests (bats) and treefmt checks are
+        # derivations and only run when built.
+        run: nix flake check --print-build-logs
 
   e2e-smoke:
-    name: e2e smoke (x86_64-linux)
-    runs-on: ubuntu-latest
+    name: e2e smoke (${{ matrix.system }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            system: x86_64-linux
+          # Darwin e2e catches BSD-vs-GNU userland breakage (mktemp,
+          # realpath) that flake-check cannot see.
+          - runner: macos-14
+            system: aarch64-darwin
+    runs-on: ${{ matrix.runner }}
     needs: flake-check
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
       - name: run e2e smoke
         # tests/synthetic/flake.lock is committed; no lock step here.
         run: bash tests/smoke/e2e.sh

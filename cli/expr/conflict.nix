@@ -14,13 +14,17 @@
   attr,
   optionPath,
   adapterName ? "",
+  walkModules ? "0",
 }:
 let
-  inherit ((import <nixpkgs> { })) lib;
+  flake = builtins.getFlake flakeRef;
+
+  # Same lib-threading as resolve.nix: target flake's own nixpkgs lib
+  # first, <nixpkgs/lib> fallback.
+  lib = flake.inputs.nixpkgs.lib or (import <nixpkgs/lib>);
   nixWhy = import libPath { inherit lib; };
   common = import ./_common.nix { inherit lib; };
 
-  flake = builtins.getFlake flakeRef;
   target = common.resolveAttr flake attr;
 
   adapted = nixWhy.adapters.adapt {
@@ -28,8 +32,15 @@ let
     flakeOutput = target;
   };
 
+  # Same gate as resolve.nix: options-surface by default. Walking raw
+  # modules re-applies function modules that may need unavailable
+  # specialArgs, which aborts uncatchably; conflicts are detected on
+  # the surface path (tryEval of the merged value) regardless.
+  walkList = if walkModules == "1" then adapted.modules else [ ];
+
   ast = nixWhy.resolve {
-    inherit (adapted) modules options config;
+    inherit (adapted) options config;
+    modules = walkList;
     path = optionPath;
   };
 in

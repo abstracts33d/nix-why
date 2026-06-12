@@ -24,7 +24,9 @@
   mode ? "resolve",
 }:
 let
-  inherit ((import <nixpkgs> { })) lib;
+  # No flake in scope for the eval subcommand; lib-only import avoids
+  # instantiating the pkgs fixpoint.
+  lib = import <nixpkgs/lib>;
   nixWhy = import libPath { inherit lib; };
   common = import ./_common.nix { inherit lib; };
 

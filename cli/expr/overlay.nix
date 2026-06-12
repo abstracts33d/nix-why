@@ -15,9 +15,12 @@
   attrPath ? "",
 }:
 let
-  inherit ((import <nixpkgs> { })) lib;
-  common = import ./_common.nix { inherit lib; };
   flake = builtins.getFlake flakeRef;
+
+  # Target flake's own nixpkgs lib first, <nixpkgs/lib> fallback (see
+  # resolve.nix).
+  lib = flake.inputs.nixpkgs.lib or (import <nixpkgs/lib>);
+  common = import ./_common.nix { inherit lib; };
 
   parts = if attr == "" then [ ] else lib.splitString "." attr;
   target =

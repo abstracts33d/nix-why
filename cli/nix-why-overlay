@@ -91,6 +91,7 @@ while (($# > 0)); do
       shift
       ;;
     --limit)
+      nix_why_require_arg nix-why-overlay --limit $#
       attr_limit="$2"
       shift 2
       ;;
@@ -122,6 +123,8 @@ while (($# > 0)); do
   esac
 done
 
+nix_why_require_int nix-why-overlay --limit "$attr_limit"
+
 if (("${#positional[@]}" < 1 || "${#positional[@]}" > 2)); then
   echo "nix-why-overlay: expected <flake-target> [<attr-path>] (got ${#positional[@]} positional args)" >&2
   print_usage >&2
@@ -142,6 +145,7 @@ nix_why_init_colors
 # listing mode (attrPath empty) and attribution mode (attrPath given).
 nix_eval_args=(
   --eval --strict --json --impure
+  --extra-experimental-features flakes
   --argstr flakeRef "${flake_ref}"
   --argstr attr "${attr_expr}"
   --argstr attrPath "${attr_path}"

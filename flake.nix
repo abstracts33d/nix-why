@@ -68,6 +68,9 @@
                   [
                     pkgs.jq
                     pkgs.nix
+                    # GNU coreutils pinned so mktemp/realpath/sort behave
+                    # identically on darwin (BSD userland) and linux.
+                    pkgs.coreutils
                   ]
                   ++ extraDeps
                 )

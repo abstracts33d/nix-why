@@ -596,6 +596,35 @@ let
     inherit (t) passed;
   }) unionTests;
 
+  # Adapter autodetect resilience. A nixos-shaped output can throw when a
+  # probe forces a not-fully-buildable part (e.g. config.system.build
+  # assertions on a config fine to introspect but missing fileSystems).
+  # detectAdapter must treat a throwing probe as "no match" and fall
+  # through to the cheaper config.boot signal, not abort. Here config.system
+  # throws, mimicking that; detection must still return "nixos".
+  adapterTests =
+    let
+      adapters = import ../lib/adapters { inherit lib; };
+      throwingNixos = {
+        config = {
+          boot = { };
+          system = throw "assertion: incomplete config";
+        };
+        options = { };
+      };
+    in
+    [
+      {
+        name = "detect-nixos-despite-throwing-probe";
+        passed = adapters.detectAdapter throwingNixos == "nixos";
+      }
+    ];
+
+  adapterResults = map (t: {
+    inherit (t) name;
+    inherit (t) passed;
+  }) adapterTests;
+
   results =
     fixtureResults
     ++ v03Results
@@ -604,11 +633,12 @@ let
     ++ sourceResults
     ++ ssotResults
     ++ crashFixResults
-    ++ unionResults;
+    ++ unionResults
+    ++ adapterResults;
   failures = builtins.filter (r: !r.passed) results;
 in
 {
   inherit results failures;
   pass = failures == [ ];
-  summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline + ${toString (builtins.length v04Results)} v0.4 inline + ${toString (builtins.length driftResults)} drift-guard + ${toString (builtins.length sourceResults)} source-parse + ${toString (builtins.length ssotResults)} ssot + ${toString (builtins.length crashFixResults)} crash-fix + ${toString (builtins.length unionResults)} union), ${toString (builtins.length failures)} failed";
+  summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline + ${toString (builtins.length v04Results)} v0.4 inline + ${toString (builtins.length driftResults)} drift-guard + ${toString (builtins.length sourceResults)} source-parse + ${toString (builtins.length ssotResults)} ssot + ${toString (builtins.length crashFixResults)} crash-fix + ${toString (builtins.length unionResults)} union + ${toString (builtins.length adapterResults)} adapter), ${toString (builtins.length failures)} failed";
 }

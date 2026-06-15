@@ -154,6 +154,33 @@ to force this. Closing the gap natively — so every config gets full
 provenance without reconstruction — is the upstream goal (a
 module-system RFC); nix-why is the proof of need.
 
+When `--full` cannot reconstruct the walk, output stays on the default
+tier and `moduleWalkAvailable` is `false`; the resolved value, priority,
+type and declaration remain correct. The tool degrades, it does not lie.
+
+### Freeform / undeclared attributes
+
+`nix.settings.*` and other freeform attrs have a value in the config
+but are not declared options. nix-why surfaces them as `kind = "freeform"`
+(value + type, no declaration or per-definition provenance) rather than
+reporting "does not exist":
+
+```sh
+$ nix-why-option .#nixosConfigurations.krach nix.settings.experimental-features
+nix.settings.experimental-features : list
+  freeform   not a declared option; value read from config
+  value     ["nix-command","flakes"]
+```
+
+### Scope
+
+nix-why operates on **successful evaluations** of declared options. It
+is not a closure/dependency tool (`nix-tree`, `nix why-depends`), a docs
+search (`manix`), or a `--show-trace` replacement for failed builds. A
+flake whose outputs do not evaluate under `builtins.getFlake`, or an
+option that aborts uncatchably when forced, surfaces as a passed-through
+evaluation error (exit 4), not a crash.
+
 ## Exit codes
 
 | Code | Meaning |

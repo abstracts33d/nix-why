@@ -159,10 +159,14 @@ nix_why_classify_error() {
       classify_message="flake not found at ${path_inner}"
       ;;
     "attribute '"*"' missing")
-      local attr="${root_msg#attribute \'}"
-      attr="${attr%\' missing}"
-      classify_kind="attribute-missing"
-      classify_message="attribute '${attr}' not found in flake"
+      # A raw Nix "attribute 'X' missing" is always a DEEP evaluation
+      # error here: target resolution emits self-namespaced "nix-why:"
+      # messages, never this. It means an option the config exposes could
+      # not be introspected (an uncatchable attribute-missing inside the
+      # module system - the native gap). Surface it honestly as an eval
+      # failure, not as a flake-attribute lookup that "found nothing".
+      classify_kind="eval-error"
+      classify_message="${root_msg}"
       ;;
     "nix-why: "*)
       classify_kind="nix-why-throw"

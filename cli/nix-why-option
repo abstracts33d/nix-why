@@ -294,8 +294,8 @@ if ((nix_rc != 0)); then
       *"nix-why: no attribute path given after"* | \
       *"nix-why: could not detect adapter"* | \
       *"nix-why: unknown adapter"* | \
-      *"error: path '"*"' does not exist"* | \
-      *"error: attribute '"*"' missing"*)
+      *"error: path '"*"' does not exist"*)
+      # Target / schema / flake-reachability failures.
       exit 3
       ;;
     *)

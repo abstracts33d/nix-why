@@ -4,7 +4,14 @@ All notable changes to this project are tracked here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 uses semantic versioning.
 
-## Unreleased
+## v0.5.0 - 2026-06-15
+
+First public release. Option resolution with per-definition provenance,
+conflict and "why-not" diagnostics, reverse lookup, search, and overlay
+attribution across NixOS / home-manager / nix-darwin / flake-parts, with
+a versioned JSON contract. Validated against a range of real public
+configurations; see the README "Provenance fidelity" section for the
+default-vs-`--full` boundary.
 
 ### API surface corrections
 

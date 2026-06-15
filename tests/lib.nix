@@ -61,6 +61,8 @@ let
     # #18 merge-semantics fidelity
     "order-wrapper"
     "mkif-parent-guard"
+    # #25 override-scope: outermost override priority (pushDown)
+    "nested-override-priority"
   ];
 
   fixtureResults = map runFixture fixtureNames;

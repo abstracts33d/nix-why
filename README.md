@@ -15,10 +15,10 @@ adjacent investigations.
 
 ## Status
 
-Pre-release. Library and CLI are functionally complete through the
-roadmap's v0.5 milestone (option resolution, conflict explanation,
-reverse lookup, search, "why is this not explicitly set?", overlay
-attribution). The public contract lives under
+v0.5.0 — first public release. Option resolution, conflict and
+"why-not" diagnostics, reverse lookup, search, and overlay attribution
+across NixOS / home-manager / nix-darwin / flake-parts, with a versioned
+JSON contract. The public contract lives under
 [`docs/reference/`](docs/reference/) (JSON schema + man pages);
 [`docs/comparison.md`](docs/comparison.md) maps nix-why against the
 existing tooling.

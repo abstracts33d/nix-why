@@ -30,6 +30,10 @@ plain `lib.evalModules` result) and print:
   (`mkForce`, `mkDefault`, …) and `mkIf` guard recovery
 - merge conflicts (when an option's definitions cannot be merged)
 
+An undeclared freeform attribute (e.g. a `nix.settings.*` key) that has
+a value in the config but no option declaration is reported with the
+value read from config and `kind` `freeform`, rather than as not found.
+
 The flake target may use any of these forms:
 
 - `.#nixosConfigurations.<host>` — explicit

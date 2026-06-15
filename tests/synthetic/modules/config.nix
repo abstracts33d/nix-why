@@ -8,6 +8,10 @@
   config.services.test.port = 9090;
   config.networking.hostName = "synthetic-test";
 
+  # Undeclared freeform key: present in config, not a declared option.
+  # nix-why-option should surface it as kind=freeform, not "not found".
+  config.settings.undeclaredKey = "free-value";
+
   # gated.enable stays false, so the mkIf below evaluates to false
   # and gated.target is left as its default. why-not should pick up
   # this filtered-out definition.

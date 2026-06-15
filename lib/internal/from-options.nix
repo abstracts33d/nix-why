@@ -157,17 +157,48 @@ in
       };
     in
     if !walked.found then
-      {
-        inherit path;
-        kind = "not-found";
-        type = null;
-        value = null;
-        valueError = null;
-        isDefined = false;
-        winningPriority = null;
-        declarations = [ ];
-        definitions = [ ];
-      }
+      # Freeform fallback: the path is not a DECLARED option, but it may
+      # be a freeform/undeclared attr that nonetheless has a value in the
+      # evaluated config (the canonical case is nix.settings.* freeform
+      # keys like experimental-features). nixos-option surfaces these; so
+      # do we, as kind = "freeform", rather than claiming the path does
+      # not exist. Truly-absent paths still fall through to "not-found".
+      let
+        existsTry = builtins.tryEval (lib.hasAttrByPath pathParts config);
+        exists = existsTry.success && existsTry.value;
+        valTry =
+          if exists then
+            builtins.tryEval (lib.getAttrFromPath pathParts config)
+          else
+            {
+              success = false;
+              value = null;
+            };
+      in
+      if exists && valTry.success then
+        {
+          inherit path;
+          kind = "freeform";
+          type = builtins.typeOf valTry.value;
+          inherit (valTry) value;
+          valueError = null;
+          isDefined = true;
+          winningPriority = null;
+          declarations = [ ];
+          definitions = [ ];
+        }
+      else
+        {
+          inherit path;
+          kind = "not-found";
+          type = null;
+          value = null;
+          valueError = null;
+          isDefined = false;
+          winningPriority = null;
+          declarations = [ ];
+          definitions = [ ];
+        }
     else
       let
         raw = walked.opt;

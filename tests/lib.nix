@@ -63,6 +63,8 @@ let
     "mkif-parent-guard"
     # #25 override-scope: outermost override priority (pushDown)
     "nested-override-priority"
+    # freeform / undeclared attr surfacing (nixos-option parity)
+    "freeform-undeclared"
   ];
 
   fixtureResults = map runFixture fixtureNames;

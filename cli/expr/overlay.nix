@@ -23,11 +23,19 @@ let
   common = import ./_common.nix { inherit lib; };
 
   parts = if attr == "" then [ ] else lib.splitString "." attr;
+  # Resolve the target like nix-why-option: an explicit path that exists
+  # (nixosConfigurations.krach, legacyPackages.<system>, ...) is used
+  # verbatim; otherwise fall back to the schema-shorthand autodetect so
+  # `.#krach` resolves to nixosConfigurations.krach (the README-advertised
+  # form). resolveAttr alone cannot be used directly because it only knows
+  # the config schemas, not legacyPackages.
   target =
     if parts == [ ] then
       throw "nix-why-overlay: no attribute path given after '#'"
+    else if lib.hasAttrByPath parts flake then
+      lib.attrByPath parts (throw "unreachable") flake
     else
-      lib.attrByPath parts (throw "nix-why-overlay: attribute path '${attr}' not found in flake") flake;
+      common.resolveAttr flake attr;
 
   pathParts = if attrPath == "" then [ ] else lib.splitString "." attrPath;
 

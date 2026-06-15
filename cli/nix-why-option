@@ -316,6 +316,11 @@ if [[ "$subcommand" != "search" ]]; then
     "option")
       # Defined or not, full output below. Exit code 1 if not defined.
       ;;
+    "freeform")
+      # Undeclared/freeform attr with a value in config (e.g. a
+      # nix.settings.* freeform key). Rendered like an option below; the
+      # renderer adds a freeform note. Exit 0 (the value exists).
+      ;;
     "not-found")
       nix_why_emit_error nix-why-option "$format" "option-not-found" \
         "option '${option_path}' does not exist"
@@ -409,7 +414,7 @@ render_conflict() {
 render_tree() {
   local ast="$1"
 
-  local path type isDefined winningPriority winningPriorityKind def_count valueError conflict_count
+  local path type isDefined winningPriority winningPriorityKind def_count valueError conflict_count kind
   path=$(jq -r '.path' <<< "$ast")
   type=$(jq -r '.type // "unknown"' <<< "$ast")
   isDefined=$(jq -r '.isDefined' <<< "$ast")
@@ -418,9 +423,20 @@ render_tree() {
   def_count=$(jq -r '.definitions | length' <<< "$ast")
   valueError=$(jq -r '.valueError // empty' <<< "$ast")
   conflict_count=$(jq -r '.conflicts | length' <<< "$ast")
+  kind=$(jq -r '.kind // empty' <<< "$ast")
 
   # Header
   printf '%b%s%b : %b%s%b\n' "$C_BOLD" "$path" "$C_RESET" "$C_CYAN" "$type" "$C_RESET"
+
+  # Freeform: undeclared attr with a value in config (no declaration, no
+  # priority/definition provenance available).
+  if [[ "$kind" == "freeform" ]]; then
+    printf '  %bfreeform%b   not a declared option; value read from config\n' "$C_YELLOW" "$C_RESET"
+    local val_raw
+    val_raw=$(jq -c '.value' <<< "$ast")
+    printf '  value     %s\n' "$(render_value "$val_raw" "$max_value")"
+    return
+  fi
 
   # Value line: respects valueError (conflict case) and isDefined.
   if [[ -n "$valueError" ]]; then

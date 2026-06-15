@@ -164,8 +164,11 @@ if ((nix_rc != 0)); then
   case "$nix_stderr" in
     *"nix-why-overlay: attribute path"* | \
       *"nix-why-overlay: no attribute path given"* | \
+      *"nix-why: "* | \
       *"error: path '"*"' does not exist"* | \
       *"error: attribute '"*"' missing"*)
+      # nix-why: throws are schema-autodetect / target-resolution
+      # failures (same class as option's exit 3).
       exit 3
       ;;
     *)

@@ -26,6 +26,16 @@
     description = "Hostname.";
   };
 
+  # Freeform submodule: accepts undeclared keys whose values live in
+  # config but are not declared options (the nix.settings.* shape).
+  options.settings = lib.mkOption {
+    type = lib.types.submodule {
+      freeformType = lib.types.attrsOf lib.types.anything;
+    };
+    default = { };
+    description = "Freeform settings; exercises kind=freeform.";
+  };
+
   # An option whose only user definition is gated by mkIf.
   options.gated = {
     enable = lib.mkOption {

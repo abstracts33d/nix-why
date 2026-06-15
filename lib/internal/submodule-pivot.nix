@@ -1,5 +1,7 @@
 { lib }:
 let
+  inherit (import ./apply-module.nix { inherit lib; }) applyFunctionModule;
+
   # Descend a config attrset along `parts`, preserving any _type wrappers
   # encountered on the way down. The result can be fed back as the
   # `config` of a synthetic module - lib.evalModules will rediscover
@@ -36,24 +38,6 @@ let
         descendWithWrappers cfg.${head} tail
       else
         null;
-
-  # Apply a function module with captured args; falls back to filtering
-  # args when the function rejects unknown keys. Mirrors the helper in
-  # from-modules.nix.
-  applyFunctionModule =
-    fn: capturedArgs:
-    let
-      argSpec = builtins.functionArgs fn;
-      fullCall = builtins.tryEval (fn capturedArgs);
-    in
-    if fullCall.success then
-      fullCall.value
-    else
-      let
-        filteredArgs = lib.filterAttrs (n: _: argSpec ? ${n}) capturedArgs;
-        filteredCall = builtins.tryEval (fn filteredArgs);
-      in
-      if filteredCall.success then filteredCall.value else null;
 
   # Normalize a module to its config attrset and source file. Function
   # modules are applied with capturedArgs; path modules are imported and
@@ -175,6 +159,45 @@ in
     }:
     let
       cls = classifySubmodule opt;
+
+      # Forward the captured module args the submodule's sub-modules may
+      # reference (pkgs, specialArgs-derived, ...) via specialArgs.
+      # config/options/lib are module-system-provided and must not be
+      # overridden (passing the OUTER config as a submodule arg is wrong).
+      forwardedArgs = builtins.removeAttrs capturedArgs [
+        "config"
+        "options"
+        "lib"
+      ];
+
+      # Evaluate a submodule's modules in a guarded, seeded context.
+      # `extraArgs` seeds `_module.args` (e.g. the attrsOf key as
+      # `name`): a submodule sub-option whose default references `name`
+      # (the users.users.<name> pattern) otherwise aborts uncatchably -
+      # the `{ name, ... }:` function is applied without `name`.
+      # evalModules is lazy and tryEval is shallow, so we force the
+      # option-tree structure inside the guard; a broken construction
+      # then returns null instead of aborting the walker downstream.
+      evalSub =
+        subModules: synthetic: extraArgs:
+        let
+          tried = builtins.tryEval (
+            let
+              res = lib.evalModules {
+                modules =
+                  subModules
+                  ++ synthetic
+                  ++ [
+                    { config._module.check = false; }
+                    { config._module.args = extraArgs; }
+                  ];
+                specialArgs = forwardedArgs;
+              };
+            in
+            builtins.seq (builtins.attrNames res.options) res
+          );
+        in
+        if tried.success then tried.value else null;
     in
     if cls.kind == "none" || remaining == [ ] then
       null
@@ -184,18 +207,14 @@ in
         synthetic = extractSyntheticModules {
           inherit modules capturedArgs prefix;
         };
-        evaluated = builtins.tryEval (
-          lib.evalModules {
-            modules = subModules ++ synthetic ++ [ { config._module.check = false; } ];
-          }
-        );
+        evaluated = evalSub subModules synthetic { };
       in
-      if !evaluated.success then
+      if evaluated == null then
         null
       else
         {
-          options = evaluated.value.options;
-          config = evaluated.value.config;
+          inherit (evaluated) options;
+          inherit (evaluated) config;
           remainingAfter = remaining;
           # Pass synthetic modules forward so a *nested* submodule pivot
           # can extract its own definitions from them (the originals
@@ -213,18 +232,16 @@ in
           inherit modules capturedArgs;
           prefix = prefix ++ [ key ];
         };
-        evaluated = builtins.tryEval (
-          lib.evalModules {
-            modules = subModules ++ synthetic ++ [ { config._module.check = false; } ];
-          }
-        );
+        # Seed the attrsOf key as `name`, mirroring what the attrsOf /
+        # submoduleWith machinery injects during a real evaluation.
+        evaluated = evalSub subModules synthetic { name = key; };
       in
-      if !evaluated.success then
+      if evaluated == null then
         null
       else
         {
-          options = evaluated.value.options;
-          config = evaluated.value.config;
+          inherit (evaluated) options;
+          inherit (evaluated) config;
           remainingAfter = afterKey;
           syntheticModules = synthetic;
         }

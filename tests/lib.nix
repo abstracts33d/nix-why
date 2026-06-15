@@ -57,6 +57,7 @@ let
     "submodule-single"
     "submodule-attrsof"
     "submodule-nested"
+    "submodule-name-arg"
   ];
 
   fixtureResults = map runFixture fixtureNames;
@@ -461,12 +462,77 @@ let
     inherit (t) passed;
   }) ssotTests;
 
+  # Crash-fix regression tests. These reproduce uncatchable evaluation
+  # aborts the module-walk hit on real configs (builtins.tryEval does
+  # NOT catch "called without required argument"). Each must RESOLVE
+  # (not abort) for the suite to even evaluate.
+  crashFixTests =
+    let
+      # A function module requiring a specialArg. evalModules supplies it
+      # via specialArgs, so the config evaluates; but the arg is NOT in
+      # config._module.args, so nix-why's module-walk re-application lacks
+      # it. Pre-fix: `builtins.tryEval (fn capturedArgs)` could not catch
+      # the "missing required argument" abort and resolve crashed
+      # wholesale. Post-fix: the un-appliable module is skipped, the plain
+      # definition still resolves.
+      specialArgModules = [
+        {
+          options.foo.enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "test";
+          };
+          config.foo.enable = true;
+        }
+        (
+          { mySpecialArg, ... }:
+          {
+            config.foo.enable = lib.mkForce mySpecialArg;
+          }
+        )
+      ];
+      specialArgEval = lib.evalModules {
+        modules = specialArgModules ++ [ permissive ];
+        specialArgs = {
+          mySpecialArg = false;
+        };
+      };
+      specialArgAst = nixWhy.resolve {
+        modules = specialArgModules;
+        inherit (specialArgEval) options config;
+        path = "foo.enable";
+      };
+    in
+    [
+      {
+        name = "crashfix-specialarg-module-skipped-not-aborted";
+        # resolve completes; surface value is the merged truth (mkForce
+        # false applied by evalModules), and the walk kept the plain
+        # `config.foo.enable = true` definition rather than aborting.
+        passed =
+          specialArgAst.kind == "option"
+          && specialArgAst.value == false
+          && builtins.any (d: d.value == true) specialArgAst.definitions;
+      }
+    ];
+
+  crashFixResults = map (t: {
+    inherit (t) name;
+    inherit (t) passed;
+  }) crashFixTests;
+
   results =
-    fixtureResults ++ v03Results ++ v04Results ++ driftResults ++ sourceResults ++ ssotResults;
+    fixtureResults
+    ++ v03Results
+    ++ v04Results
+    ++ driftResults
+    ++ sourceResults
+    ++ ssotResults
+    ++ crashFixResults;
   failures = builtins.filter (r: !r.passed) results;
 in
 {
   inherit results failures;
   pass = failures == [ ];
-  summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline + ${toString (builtins.length v04Results)} v0.4 inline + ${toString (builtins.length driftResults)} drift-guard + ${toString (builtins.length sourceResults)} source-parse + ${toString (builtins.length ssotResults)} ssot), ${toString (builtins.length failures)} failed";
+  summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline + ${toString (builtins.length v04Results)} v0.4 inline + ${toString (builtins.length driftResults)} drift-guard + ${toString (builtins.length sourceResults)} source-parse + ${toString (builtins.length ssotResults)} ssot + ${toString (builtins.length crashFixResults)} crash-fix), ${toString (builtins.length failures)} failed";
 }

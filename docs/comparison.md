@@ -54,9 +54,14 @@ January 2025); the rewrite also prints definition files via
   - NixOS-only. Doesn't apply to home-manager, nix-darwin, or
     flake-parts configurations.
 
-nix-why-option is intended to supersede `nixos-option`'s diagnostic
-role on every dimension above, while keeping the same one-liner
-ergonomics for the common case.
+nix-why-option supersedes `nixos-option`'s diagnostic role on the
+dimensions above for the common case, keeping the same one-liner
+ergonomics. Caveat: the deepest tier (per-definition line numbers,
+priority kinds, and `mkIf`-filtered candidates) is opt-in via `--full`
+and best-effort — it degrades to options-surface fidelity on deeply
+imported configurations (see the README's "Provenance fidelity"). The
+default tier — winning value, priority, type, declaration, and freeform
+values — is always available and never fails.
 
 ### `options.<path>.definitionsWithLocations`
 

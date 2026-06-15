@@ -101,6 +101,17 @@ else
   fail "nonexistent option exit code" "expected 2, got $rc"
 fi
 
+# Freeform / undeclared attr -> kind=freeform, value surfaced, exit 0.
+rc=0
+j="$($OPTION --json "${SYNTHETIC}#test" settings.undeclaredKey 2> /dev/null)" || rc=$?
+k="$(printf '%s' "$j" | jq -r '.kind' 2> /dev/null)"
+v="$(printf '%s' "$j" | jq -r '.value' 2> /dev/null)"
+if [[ $rc == 0 && $k == "freeform" && $v == "free-value" ]]; then
+  ok "freeform undeclared attr surfaces value (kind=freeform)"
+else
+  fail "freeform attr handling" "rc=$rc kind=$k value=$v"
+fi
+
 # ---------------------------------------------------------------------------
 # nix-why-option search
 # ---------------------------------------------------------------------------
@@ -201,6 +212,17 @@ if [[ $rc == "3" ]]; then
   ok "overlay on synthetic (no pkgs) -> exit 3 with discovery message"
 else
   fail "overlay exit code" "expected 3, got $rc"
+fi
+
+# Schema-shorthand autodetect: `.#test` must resolve to
+# nixosConfigurations.test (same as nix-why-option), reaching overlay
+# DISCOVERY - not failing with "attribute path 'test' not found".
+rc=0
+out="$($OVERLAY "${SYNTHETIC}#test" 2>&1)" || rc=$?
+if [[ $rc == "3" ]] && grep -q "could not locate overlays" <<< "$out"; then
+  ok "overlay shorthand .#test autodetects (reaches discovery)"
+else
+  fail "overlay shorthand autodetect" "rc=$rc out=$(tr '\n' '|' <<< "$out" | head -c 160)"
 fi
 
 # ---------------------------------------------------------------------------

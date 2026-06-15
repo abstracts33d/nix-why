@@ -39,7 +39,7 @@ Emitted by the default subcommand and by `eval`.
 |---|---|---|
 | `schemaVersion` | string | `"1"` |
 | `path` | string | Dotted option path |
-| `kind` | `"option" \| "not-found" \| "not-an-option"` | Resolution category |
+| `kind` | `"option" \| "freeform" \| "not-found" \| "not-an-option"` | Resolution category. `"freeform"` = an undeclared attr with a value in config (e.g. a `nix.settings.*` freeform key): `value`/`type` set, `declarations`/`definitions` empty. |
 | `type` | string | Nix option type description |
 | `value` | any | Final merged value, or `null` if `valueError` |
 | `valueError` | string \| null | Set when evaluation of the value failed |
@@ -57,7 +57,7 @@ Emitted by the default subcommand and by `eval`.
 |---|---|---|
 | `schemaVersion` | string | `"1"` |
 | `path` | string | Queried option path |
-| `kind` | `"option" \| "not-found" \| "not-an-option"` | Resolution category |
+| `kind` | `"option" \| "freeform" \| "not-found" \| "not-an-option"` | Resolution category. `"freeform"` = an undeclared attr with a value in config (e.g. a `nix.settings.*` freeform key): `value`/`type` set, `declarations`/`definitions` empty. |
 | `type` | string | Option type description |
 | `isDefined` | bool | True if the option has at least one definition |
 | `declarations[]` | object | `{ file, line, column }` for each declaration |

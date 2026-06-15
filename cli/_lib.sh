@@ -50,6 +50,13 @@ strip_store_prefix() {
   fi
 }
 
+# Strip every /nix/store/<hash>-<name>/ occurrence from arbitrary text.
+# For free-form strings (e.g. the why-not hint) that embed store paths,
+# where strip_store_prefix (single-path) does not apply.
+strip_store_in_text() {
+  sed -E 's#/nix/store/[^/[:space:]]+/##g' <<< "$1"
+}
+
 # Resolve a flake reference to an absolute path (or leave registry
 # URLs alone). builtins.getFlake requires either an absolute path or
 # a registry/URL form.

@@ -5,6 +5,8 @@
 
 > Why is this NixOS / home-manager / nix-darwin option set to this value?
 
+![nix-why demo](demo/nix-why.gif)
+
 `nix-why` is an umbrella for small, focused tools that answer diagnostic
 questions about a Nix evaluation. The flagship `nix-why-option` explains
 exactly why an option has the value it has; the sibling tools

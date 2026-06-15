@@ -50,9 +50,22 @@ let
       walk {
         value = value.content;
         inherit pathParts pos;
-        ctx = ctx // {
-          inherit (value) priority;
-        };
+        # Take the OUTERMOST override priority. nixpkgs pushes an outer
+        # override down onto nested attrs (pushDownProperties), so a
+        # leaf's effective priority is the first wrapper seen on the way
+        # down, not the innermost. Lock after the first so inner wrappers
+        # (e.g. mkForce { a = mkDefault 1; }) do not overwrite it.
+        ctx =
+          ctx
+          // (
+            if ctx.priorityLocked or false then
+              { }
+            else
+              {
+                inherit (value) priority;
+                priorityLocked = true;
+              }
+          );
       }
     else if ty == "merge" then
       lib.concatMap (
@@ -119,6 +132,7 @@ in
       pos = null;
       ctx = {
         priority = 100;
+        priorityLocked = false;
         conditions = [ ];
       };
     };

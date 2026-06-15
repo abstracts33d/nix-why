@@ -2,28 +2,7 @@
 let
   walker = import ./walker.nix { inherit lib; };
   priority = import ./priority.nix { inherit lib; };
-
-  # Apply a function module with the captured _module.args. Two-step:
-  # 1. Try calling with all captured args (works for `{ a, b, ... }: ...`
-  #    where the function accepts varargs).
-  # 2. If that throws "unexpected argument", filter to only the keys the
-  #    function declares (works for `{ a, b }: ...`).
-  # 3. If even the filtered call throws, give up - that module's
-  #    contributions will not appear in the walk.
-  applyFunctionModule =
-    fn: capturedArgs:
-    let
-      argSpec = builtins.functionArgs fn;
-      fullCall = builtins.tryEval (fn capturedArgs);
-    in
-    if fullCall.success then
-      fullCall.value
-    else
-      let
-        filteredArgs = lib.filterAttrs (n: _: argSpec ? ${n}) capturedArgs;
-        filteredCall = builtins.tryEval (fn filteredArgs);
-      in
-      if filteredCall.success then filteredCall.value else null;
+  inherit (import ./apply-module.nix { inherit lib; }) applyFunctionModule;
 
   # Normalize a single module entry to { cfg, file } or null when we
   # cannot evaluate it.

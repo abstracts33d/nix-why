@@ -200,7 +200,7 @@ while IFS= read -r conflict; do
   printf '\n  %b⚠ CONFLICT%b: %s\n' "$C_RED" "$C_RESET" "$msg"
   printf '  Involved definitions:\n'
   while IFS= read -r def; do
-    file=$(jq -r '.file // "<unknown>"' <<< "$def")
+    file=$(strip_store_prefix "$(jq -r '.file // "<unknown>"' <<< "$def")")
     line=$(jq -r '.line // empty' <<< "$def")
     priorityKind=$(jq -r '.priorityKind // "unknown"' <<< "$def")
     value=$(jq -c '.value' <<< "$def")

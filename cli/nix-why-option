@@ -680,7 +680,7 @@ render_why_not() {
 
   while IFS= read -r decl; do
     local f l
-    f=$(jq -r '.file' <<< "$decl")
+    f=$(strip_store_prefix "$(jq -r '.file' <<< "$decl")")
     l=$(jq -r '.line // empty' <<< "$decl")
     if [[ -n "$l" ]]; then
       printf '  declared  %s:%s\n' "$f" "$l"
@@ -715,7 +715,7 @@ render_why_not() {
         "$C_DIM" "$filtered_count" "$(plural_s "$filtered_count")" "$C_RESET"
       while IFS= read -r d; do
         local file line guard_src
-        file=$(jq -r '.file // "<unknown>"' <<< "$d")
+        file=$(strip_store_prefix "$(jq -r '.file // "<unknown>"' <<< "$d")")
         line=$(jq -r '.line // empty' <<< "$d")
         guard_src=$(jq -r '.guardedBy.source // "<unknown condition>"' <<< "$d")
         local pos="$file"
@@ -726,7 +726,7 @@ render_why_not() {
     fi
     if [[ -n "$hint" ]]; then
       echo
-      printf '  %bHint:%b %s\n' "$C_BOLD" "$C_RESET" "$hint"
+      printf '  %bHint:%b %s\n' "$C_BOLD" "$C_RESET" "$(strip_store_in_text "$hint")"
     fi
   fi
 }

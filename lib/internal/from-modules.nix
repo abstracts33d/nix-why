@@ -60,6 +60,12 @@ let
             evaluatedTo = held;
             count = builtins.length conds;
           };
+      # Position of the OUTERMOST mkIf, recorded by the walker when it
+      # unwrapped the guard - not the leaf position. The guard sits at or
+      # above this point, so the source extractor must scan from here; the
+      # leaf position is past the mkIf token and finds the wrong condition
+      # (or none). Internal; dropped by finalizeDef.
+      guardSource = if conds == [ ] then null else (builtins.head conds).pos;
       inherit (leaf) value;
     };
 in

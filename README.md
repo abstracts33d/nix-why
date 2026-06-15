@@ -77,6 +77,31 @@ $ nix-why-option what-sets .#nixosConfigurations.krach services.openssh.enable
 # -> list of modules that contain a definition for the option
 ```
 
+## Targets
+
+Every subcommand takes a `<flake-target>` as its first positional (after
+the subcommand, if any): a flake reference to an evaluated configuration.
+
+| Form | Resolves to |
+|---|---|
+| `.#nixosConfigurations.krach` | explicit |
+| `.#krach` | shorthand; autodetects `nixosConfigurations` / `darwinConfigurations` / `homeConfigurations` |
+| `.#homeConfigurations."s33d@krach"` | standalone home-manager |
+| `<path>#<attr>` | a flake at a relative or absolute path |
+| `github:owner/repo#<attr>` | a remote flake |
+
+### Non-flake configs
+
+No flake required. The `eval` subcommand takes any expression that
+evaluates to a configuration, so a plain `configuration.nix` works
+through the stock NixOS entry point:
+
+```sh
+nix-why-option eval \
+  'import <nixpkgs/nixos> { configuration = /etc/nixos/configuration.nix; }' \
+  services.openssh.enable
+```
+
 ## Flags
 
 | Flag | Purpose |

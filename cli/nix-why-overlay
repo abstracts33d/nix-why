@@ -165,10 +165,10 @@ if ((nix_rc != 0)); then
     *"nix-why-overlay: attribute path"* | \
       *"nix-why-overlay: no attribute path given"* | \
       *"nix-why: "* | \
-      *"error: path '"*"' does not exist"* | \
-      *"error: attribute '"*"' missing"*)
+      *"error: path '"*"' does not exist"*)
       # nix-why: throws are schema-autodetect / target-resolution
-      # failures (same class as option's exit 3).
+      # failures (same class as option's exit 3). A raw "attribute
+      # missing" is a deep eval error -> falls through to exit 4.
       exit 3
       ;;
     *)

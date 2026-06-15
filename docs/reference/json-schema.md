@@ -167,12 +167,11 @@ fields are not guaranteed to exist (and vice versa).
 | `kind` | Trigger | Typical exit |
 |---|---|---|
 | `flake-not-found` | `builtins.getFlake` could not read the given path | 3 |
-| `attribute-missing` | `attrByPath` into the flake found nothing | 3 |
-| `nix-why-throw` | One of the lib's structured `nix-why: …` throws (adapter detection, schema autodetect, no attr after `#`, unknown adapter, ...) | 3 |
+| `nix-why-throw` | One of the lib's structured `nix-why: …` throws (adapter detection, schema autodetect, no attr after `#`, unknown adapter, target attribute not found, ...) | 3 |
 | `option-not-found` | Option path did not exist in the options tree | 2 |
 | `not-an-option` | Option path exists but is an intermediate attrset, not a leaf option | 2 |
 | `internal-error` | Tool returned an unexpected AST `kind`; please report | 4 |
-| `eval-error` | Any other `nix-instantiate` failure | 4 |
+| `eval-error` | Any other `nix-instantiate` failure, including a deep `attribute 'X' missing` from forcing an un-introspectable option (the native module-system gap). Target-attribute failures are `nix-why-throw` (exit 3), not this. | 4 |
 
 ### Special-case: `nix-why-overlay`
 

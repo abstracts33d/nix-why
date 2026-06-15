@@ -507,18 +507,34 @@ rec {
       maxSubmoduleDepth ? 2,
     }:
     let
+      # Best-effort force: return `default` when evaluating `e` throws a
+      # CATCHABLE error. (Uncatchable aborts - e.g. attribute-missing -
+      # still propagate; search cannot guard those.)
+      tryOr =
+        default: e:
+        let
+          t = builtins.tryEval e;
+        in
+        if t.success then t.value else default;
+
       # Walk into the sub-options tree of a submodule-typed option.
       # Returns an attrset of sub-options on success, null on any
       # eval failure (so search stays robust against odd type configs).
+      # getSubOptions is forced to its key structure INSIDE the tryEval
+      # (it is lazy; a shallow tryEval would defer a malformed result's
+      # throw to the caller).
       subOptionsOf =
         opt:
         let
-          typeName = opt.type.name or null;
+          typeName = tryOr null (opt.type.name or null);
+          forceKeys = s: builtins.seq (builtins.attrNames s) s;
           subOptsTried =
             if typeName == "submodule" then
-              builtins.tryEval (opt.type.getSubOptions [ ])
-            else if typeName == "attrsOf" && (opt.type.nestedTypes.elemType.name or null) == "submodule" then
-              builtins.tryEval (opt.type.nestedTypes.elemType.getSubOptions [ ])
+              builtins.tryEval (forceKeys (opt.type.getSubOptions [ ]))
+            else if
+              typeName == "attrsOf" && (tryOr null (opt.type.nestedTypes.elemType.name or null)) == "submodule"
+            then
+              builtins.tryEval (forceKeys (opt.type.nestedTypes.elemType.getSubOptions [ ]))
             else
               { success = false; };
         in
@@ -549,16 +565,22 @@ rec {
             # submodule sub-paths so they remain queryable.
             subOpts = if isOption && depth > 0 then subOptionsOf value else null;
             subPrefix =
-              if isOption && (value.type.name or null) == "attrsOf" then here ++ [ "<name>" ] else here;
+              if isOption && (tryOr null (value.type.name or null)) == "attrsOf" then
+                here ++ [ "<name>" ]
+              else
+                here;
           in
           if isOption then
             (
               [
+                # path never needs forcing (built from names), so a match
+                # is always reported even when an option's metadata is
+                # un-evaluable on a given config. Metadata is best-effort.
                 {
                   path = herePath;
-                  type = value.type.name or null;
-                  declarations = value.declarations or [ ];
-                  isDefined = value.isDefined or false;
+                  type = tryOr null (value.type.name or null);
+                  declarations = tryOr [ ] (value.declarations or [ ]);
+                  isDefined = tryOr false (value.isDefined or false);
                 }
               ]
               ++ (if subOpts == null then [ ] else collectAllOptions (depth - 1) subPrefix subOpts)

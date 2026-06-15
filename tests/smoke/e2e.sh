@@ -101,6 +101,18 @@ else
   fail "nonexistent option exit code" "expected 2, got $rc"
 fi
 
+# A deep evaluation error (raw "attribute X missing" from forcing an
+# un-introspectable option) must map to exit 4 with an honest message -
+# NOT exit 3 "attribute path not found in flake" (which falsely implies
+# the target was wrong). Reproduced portably via the eval subcommand.
+rc=0
+out="$($OPTION --no-color eval '{ modules = [ { config.foo = ({}).missingKey; } ]; }' foo 2>&1)" || rc=$?
+if [[ $rc == "4" ]] && grep -q "missingKey" <<< "$out" && ! grep -q "not found in flake" <<< "$out"; then
+  ok "deep eval error -> exit 4 with honest message (not exit 3)"
+else
+  fail "deep eval error misclassified" "rc=$rc out=$(tr '\n' '|' <<< "$out" | head -c 160)"
+fi
+
 # Freeform / undeclared attr -> kind=freeform, value surfaced, exit 0.
 rc=0
 j="$($OPTION --json "${SYNTHETIC}#test" settings.undeclaredKey 2> /dev/null)" || rc=$?

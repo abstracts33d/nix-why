@@ -1,7 +1,7 @@
 { lib }:
 let
-  # COUPLING: the `_type` markers ("if"/"override"/"merge") and their
-  # field names (.condition/.content/.priority/.contents) below are
+  # COUPLING: the `_type` markers ("if"/"override"/"merge"/"order") and
+  # their field names (.condition/.content/.priority/.contents) below are
   # nixpkgs module-system internals. They are pinned against the live
   # lib by the drift-guard in tests/lib.nix; a rename fails there loudly
   # rather than silently degrading the walk. Removing this shadow
@@ -62,6 +62,16 @@ let
           inherit pathParts pos ctx;
         }
       ) value.contents
+    else if ty == "order" then
+      # mkBefore / mkAfter / mkOrder. The wrapper's `.priority` is the
+      # list/string MERGE-ORDER rank, a different axis from the override
+      # priority (mkForce/mkDefault) tracked in ctx - do NOT touch
+      # ctx.priority. Just descend through to the underlying value, so
+      # the wrapper does not leak into the leaf.
+      walk {
+        value = value.content;
+        inherit pathParts pos ctx;
+      }
     else if pathParts == [ ] then
       [
         {

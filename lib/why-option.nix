@@ -20,11 +20,21 @@ let
       def
     else
       let
-        src = internal.extractMkIfCondition {
-          inherit (def) file;
-          inherit (def) line;
-          column = def.column or 1;
-        };
+        # Scan from the guard's own recorded position (set by the walker),
+        # not the leaf - the leaf sits past the mkIf token. Falls back to
+        # the leaf position only when no guard position was captured.
+        gp = def.guardSource or null;
+        src =
+          if gp != null then
+            internal.extractMkIfCondition {
+              inherit (gp) file line;
+              column = gp.column or 1;
+            }
+          else
+            internal.extractMkIfCondition {
+              inherit (def) file line;
+              column = def.column or 1;
+            };
       in
       def
       // {
@@ -64,9 +74,22 @@ let
       useModuleWalk = fromModulesDefs != [ ];
     in
     if useModuleWalk then
-      map (
-        def: finalizeDef (fillGuardSource (def // { wins = computeWins winningPriority def; }))
-      ) fromModulesDefs
+      let
+        walkDefs = map (
+          def: finalizeDef (fillGuardSource (def // { wins = computeWins winningPriority def; }))
+        ) fromModulesDefs;
+        walkFiles = map (d: d.file) walkDefs;
+        walkHasWinner = lib.any (d: d.wins) walkDefs;
+        # Union: append surface definitions the flat walk could not see
+        # (transitively-imported modules). The surface side carries no
+        # per-def line, so file is the only stable dedup key. These
+        # recover the canonical winner when the walk found only losers;
+        # if the walk already has a winner they are kept for completeness
+        # but not re-marked as winners.
+        surfaceExtras = lib.filter (d: !(builtins.elem d.file walkFiles)) fromOptionsDefs;
+        extraDefs = map (def: finalizeDef (def // { wins = !walkHasWinner && def.wins; })) surfaceExtras;
+      in
+      walkDefs ++ extraDefs
     else
       map (def: finalizeDef (def // { wins = true; })) fromOptionsDefs;
 
@@ -287,32 +310,39 @@ rec {
             inherit modules pathParts config;
           };
 
-      # Union of options-surface winners and module-walk all-defs,
-      # deduped on (file, line). The module-walk records are richer so
-      # we prefer them when both sources see the same (file, line).
+      surfaceSetter = d: {
+        inherit (d)
+          file
+          priority
+          priorityKind
+          guardedBy
+          value
+          ;
+        line = null;
+      };
+      # Union of module-walk all-defs (richer: line + guard) with the
+      # options-surface setters the flat walk could not see (transitively
+      # imported modules). Deduped on file - the surface side has no line.
+      # The module-walk records are preferred when both sources see a file.
       setters =
-        if moduleWalk.definitions != [ ] then
-          map (d: {
-            inherit (d)
-              file
-              line
-              priorityKind
-              guardedBy
-              value
-              ;
-            inherit (d) priority;
-          }) moduleWalk.definitions
+        if moduleWalk.definitions == [ ] then
+          map surfaceSetter surface.definitions
         else
-          map (d: {
-            inherit (d)
-              file
-              priority
-              priorityKind
-              guardedBy
-              value
-              ;
-            line = null;
-          }) surface.definitions;
+          let
+            walkSetters = map (d: {
+              inherit (d)
+                file
+                line
+                priority
+                priorityKind
+                guardedBy
+                value
+                ;
+            }) moduleWalk.definitions;
+            walkFiles = map (s: s.file) walkSetters;
+            surfaceExtras = lib.filter (d: !(builtins.elem d.file walkFiles)) surface.definitions;
+          in
+          walkSetters ++ map surfaceSetter surfaceExtras;
     in
     {
       inherit (surface)

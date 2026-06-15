@@ -58,6 +58,9 @@ let
     "submodule-attrsof"
     "submodule-nested"
     "submodule-name-arg"
+    # #18 merge-semantics fidelity
+    "order-wrapper"
+    "mkif-parent-guard"
   ];
 
   fixtureResults = map runFixture fixtureNames;
@@ -318,6 +321,14 @@ let
         passed = (lib.mkMerge [ 1 ])._type == "merge" && (lib.mkMerge [ 1 ]) ? contents;
       }
       {
+        name = "drift-type-order";
+        passed =
+          (lib.mkBefore [ 1 ])._type == "order"
+          && (lib.mkBefore [ 1 ]) ? content
+          && (lib.mkBefore [ 1 ]).priority == 500
+          && (lib.mkAfter [ 1 ]).priority == 1500;
+      }
+      {
         name = "drift-prio-mkVMOverride-10";
         passed = (lib.mkVMOverride 1).priority == 10;
       }
@@ -521,6 +532,66 @@ let
     inherit (t) passed;
   }) crashFixTests;
 
+  # #18 definitions-union test. The module-walk only sees the flat
+  # `modules` list; a definition contributed by a module absent from it
+  # (the transitively-imported case) is invisible to the walk but present
+  # on the options surface - including, as here, the actual merge winner.
+  # Pre-fix mergeDefinitions was either/or: the moment the walk found
+  # anything it discarded the surface set, so the winner vanished and no
+  # definition reported wins=true. Post-fix the two sets are unioned
+  # (surface defs whose file the walk did not see are appended).
+  unionTests =
+    let
+      declModule = {
+        options.foo.enable = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = "test";
+        };
+      };
+      # Loser, seen by the walk.
+      aModule = {
+        _file = "/virtual/a.nix";
+        config.foo.enable = lib.mkDefault false;
+      };
+      # Winner, NOT in the list passed to resolve (simulates a
+      # transitively-imported module the flat walk cannot see).
+      bModule = {
+        _file = "/virtual/b.nix";
+        config.foo.enable = lib.mkForce true;
+      };
+      ev = lib.evalModules {
+        modules = [
+          declModule
+          aModule
+          bModule
+          permissive
+        ];
+      };
+      ast = nixWhy.resolve {
+        modules = [
+          declModule
+          aModule
+        ];
+        inherit (ev) options config;
+        path = "foo.enable";
+      };
+    in
+    [
+      {
+        name = "union-surface-winner-recovered";
+        passed =
+          ast.value == true
+          && builtins.any (d: d.wins) ast.definitions
+          && builtins.any (d: d.value == true) ast.definitions;
+      }
+    ];
+
+  unionResults = map (t: {
+    inherit (t) name;
+    inherit (t) passed;
+  }) unionTests;
+
   results =
     fixtureResults
     ++ v03Results
@@ -528,11 +599,12 @@ let
     ++ driftResults
     ++ sourceResults
     ++ ssotResults
-    ++ crashFixResults;
+    ++ crashFixResults
+    ++ unionResults;
   failures = builtins.filter (r: !r.passed) results;
 in
 {
   inherit results failures;
   pass = failures == [ ];
-  summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline + ${toString (builtins.length v04Results)} v0.4 inline + ${toString (builtins.length driftResults)} drift-guard + ${toString (builtins.length sourceResults)} source-parse + ${toString (builtins.length ssotResults)} ssot + ${toString (builtins.length crashFixResults)} crash-fix), ${toString (builtins.length failures)} failed";
+  summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline + ${toString (builtins.length v04Results)} v0.4 inline + ${toString (builtins.length driftResults)} drift-guard + ${toString (builtins.length sourceResults)} source-parse + ${toString (builtins.length ssotResults)} ssot + ${toString (builtins.length crashFixResults)} crash-fix + ${toString (builtins.length unionResults)} union), ${toString (builtins.length failures)} failed";
 }

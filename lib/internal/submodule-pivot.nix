@@ -34,6 +34,11 @@ let
           inners = builtins.filter (x: x != null) (map (c: descendWithWrappers c parts) cfg.contents);
         in
         if inners == [ ] then null else lib.mkMerge inners
+      else if ty == "order" then
+        let
+          inner = descendWithWrappers cfg.content parts;
+        in
+        if inner == null then null else lib.mkOrder cfg.priority inner
       else if builtins.isAttrs cfg && cfg ? ${head} then
         descendWithWrappers cfg.${head} tail
       else

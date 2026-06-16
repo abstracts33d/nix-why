@@ -4,6 +4,22 @@ All notable changes to this project are tracked here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 uses semantic versioning.
 
+## v0.5.1 - 2026-06-16
+
+Patch release from launch feedback.
+
+- **Non-flake configs work without `--adapter`.** Adapter autodetect now
+  tolerates probes that throw on not-fully-buildable configs, so a plain
+  `configuration.nix` resolves via `eval` + `import <nixpkgs/nixos>` with
+  no explicit adapter. Also removes a silent empty-output failure.
+- **Consistent store-path stripping.** `nix-why-conflict`, `why-not`, and
+  `what-sets` no longer leak `/nix/store/HASH-source/` prefixes in flake
+  configs.
+- **Docs.** README gains a Targets section (the `<flake-target>` forms)
+  and a non-flake recipe; man page notes the `freeform` kind.
+- **CI.** Dropped the `x86_64-darwin` (macos-13) runner GitHub is
+  sunsetting; `aarch64-darwin` + `x86_64-linux` remain.
+
 ## v0.5.0 - 2026-06-15
 
 First public release. Option resolution with per-definition provenance,

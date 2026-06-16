@@ -21,7 +21,7 @@
       # Single source of truth for the package version. Bump this when
       # cutting a release; both the derivation version and the runtime
       # --version output read from here.
-      nixWhyVersion = "0.5.0";
+      nixWhyVersion = "0.5.1";
 
       eachSystem = nixpkgs.lib.genAttrs (import systems);
       pkgsFor = system: nixpkgs.legacyPackages.${system};

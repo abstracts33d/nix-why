@@ -47,7 +47,17 @@ let
   detectAdapter =
     flakeOutput:
     let
-      has = path: lib.hasAttrByPath path flakeOutput;
+      # tryEval-guarded probe. Some shapes (e.g. `import <nixpkgs/nixos>`
+      # on a config that is fine to introspect but not fully buildable)
+      # throw assertions when a path like config.system.build.toplevel is
+      # forced. A throwing probe must read as "no match", not abort the
+      # whole detection, so the cheaper signals below still get a chance.
+      has =
+        path:
+        let
+          t = builtins.tryEval (lib.hasAttrByPath path flakeOutput);
+        in
+        t.success && t.value;
     in
     if
       has [

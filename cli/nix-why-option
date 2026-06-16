@@ -578,7 +578,7 @@ render_what_sets() {
 
   while IFS= read -r decl; do
     local f l
-    f=$(jq -r '.file' <<< "$decl")
+    f=$(strip_store_prefix "$(jq -r '.file' <<< "$decl")")
     l=$(jq -r '.line // empty' <<< "$decl")
     if [[ -n "$l" ]]; then
       printf '  declared  %s:%s\n' "$f" "$l"

@@ -13,8 +13,12 @@ name: ci
 #
 # Matrix coverage:
 #   x86_64-linux   (ubuntu-latest)   - primary; full check + e2e
-#   x86_64-darwin  (macos-13)        - flake-check only
 #   aarch64-darwin (macos-14)        - flake-check + e2e (BSD userland)
+#
+# x86_64-darwin (macos-13) is intentionally NOT covered: GitHub is
+# sunsetting the Intel-macOS free runners and they sit queued for hours,
+# leaving CI perpetually yellow. aarch64-darwin already exercises the
+# BSD userland; nix-why has no arch-specific code.
 
 on:
   push:
@@ -34,8 +38,6 @@ jobs:
         include:
           - runner: ubuntu-latest
             system: x86_64-linux
-          - runner: macos-13
-            system: x86_64-darwin
           - runner: macos-14
             system: aarch64-darwin
     runs-on: ${{ matrix.runner }}

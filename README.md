@@ -15,10 +15,10 @@ adjacent investigations.
 
 ## Status
 
-Pre-release. Library and CLI are functionally complete through the
-roadmap's v0.5 milestone (option resolution, conflict explanation,
-reverse lookup, search, "why is this not explicitly set?", overlay
-attribution). The public contract lives under
+v0.5.0 — first public release. Option resolution, conflict and
+"why-not" diagnostics, reverse lookup, search, and overlay attribution
+across NixOS / home-manager / nix-darwin / flake-parts, with a versioned
+JSON contract. The public contract lives under
 [`docs/reference/`](docs/reference/) (JSON schema + man pages);
 [`docs/comparison.md`](docs/comparison.md) maps nix-why against the
 existing tooling.
@@ -75,6 +75,31 @@ $ nix-why-option search .#nixosConfigurations.krach ssh
 
 $ nix-why-option what-sets .#nixosConfigurations.krach services.openssh.enable
 # -> list of modules that contain a definition for the option
+```
+
+## Targets
+
+Every subcommand takes a `<flake-target>` as its first positional (after
+the subcommand, if any): a flake reference to an evaluated configuration.
+
+| Form | Resolves to |
+|---|---|
+| `.#nixosConfigurations.krach` | explicit |
+| `.#krach` | shorthand; autodetects `nixosConfigurations` / `darwinConfigurations` / `homeConfigurations` |
+| `.#homeConfigurations."s33d@krach"` | standalone home-manager |
+| `<path>#<attr>` | a flake at a relative or absolute path |
+| `github:owner/repo#<attr>` | a remote flake |
+
+### Non-flake configs
+
+No flake required. The `eval` subcommand takes any expression that
+evaluates to a configuration, so a plain `configuration.nix` works
+through the stock NixOS entry point:
+
+```sh
+nix-why-option eval \
+  'import <nixpkgs/nixos> { configuration = /etc/nixos/configuration.nix; }' \
+  services.openssh.enable
 ```
 
 ## Flags

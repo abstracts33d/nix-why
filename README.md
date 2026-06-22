@@ -135,17 +135,37 @@ nixpkgs.overlays = [ inputs.nix-why.overlays.default ];
 environment.systemPackages = [ pkgs.nix-why-option ];
 ```
 
+### Without flakes
+
+`default.nix` mirrors the flake outputs for vanilla-nix consumers:
+
+```sh
+# Build a CLI
+nix-build -A nix-why-option
+
+# From another expression (e.g. fetchTarball / niv / npins)
+let nix-why = import (fetchTarball "https://github.com/abstracts33d/nix-why/archive/v0.5.1.tar.gz") { };
+in [ nix-why.nix-why-option ]
+
+# The overlay works the same way
+nixpkgs.overlays = [ (import nix-why-src { }).overlays.default ];
+```
+
 ## Library
 
-The Nix introspection library is exposed as a system-agnostic flake
-output:
+The Nix introspection library is system-agnostic. It takes only `lib`, so
+it is consumable with or without flakes:
 
 ```nix
+# Flake
 inputs.nix-why.lib.resolve  { modules ? [], config ? {}, options, path }
 inputs.nix-why.lib.whatSets { modules ? [], config ? {}, options, path }
 inputs.nix-why.lib.whyNot   { modules ? [], config ? {}, options, path }
 inputs.nix-why.lib.search   { options, pattern, limit ? 50 }
 inputs.nix-why.lib.adapters.adapt { name ? null, flakeOutput }
+
+# Without flakes: import the lib directly with any nixpkgs lib
+(import (nix-why-src + "/lib") { lib = pkgs.lib; }).resolve { ... }
 ```
 
 The library is the strategic asset; the bash CLI is a thin renderer

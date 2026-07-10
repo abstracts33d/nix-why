@@ -625,6 +625,162 @@ let
     inherit (t) passed;
   }) adapterTests;
 
+  # Native provenance (wedge-PR): when an option carries
+  # `definitionsWithLocationsAndPriorities`, the default (no-walk) path
+  # surfaces ALL definitions - including priority-losers - with per-def
+  # priority and win flags, no module walk required. When the attribute
+  # is absent, behaviour is byte-identical to today (winner-only, wins=true).
+  # The pinned nixpkgs lacks the attribute, so we overlay it onto a real
+  # evalModules options tree; the fallback case uses the same eval without
+  # the overlay to prove the old path is untouched.
+  nativeTests =
+    let
+      eval = lib.evalModules {
+        modules = [
+          {
+            options.port = lib.mkOption {
+              type = lib.types.int;
+              description = "native";
+            };
+          }
+          { port = lib.mkDefault 8000; }
+          { port = lib.mkForce 9000; }
+        ];
+      };
+      # Shape the wedge-PR emits: pre-filter list with priority-losers,
+      # `won` flag, override wrappers already stripped from `value`.
+      nativeDefs = [
+        {
+          file = "/fx/default.nix";
+          value = 8000;
+          priority = 1000;
+          won = false;
+        }
+        {
+          file = "/fx/force.nix";
+          value = 9000;
+          priority = 50;
+          won = true;
+        }
+      ];
+      optionsPatched = eval.options // {
+        port = eval.options.port // {
+          definitionsWithLocationsAndPriorities = nativeDefs;
+        };
+      };
+      nativeAst = nixWhy.resolve {
+        modules = [ ];
+        options = optionsPatched;
+        inherit (eval) config;
+        path = "port";
+      };
+      loser = lib.findFirst (d: d.priority == 1000) null nativeAst.definitions;
+      winner = lib.findFirst (d: d.priority == 50) null nativeAst.definitions;
+
+      # Same eval WITHOUT the overlay: the fallback path must be unchanged.
+      fallbackAst = nixWhy.resolve {
+        modules = [ ];
+        inherit (eval) options config;
+        path = "port";
+      };
+
+      # Contract slip: a native payload whose defs carry NO `won` field.
+      # The consumer must not render the option winnerless; it derives the
+      # winner from the priority that equals the eval's real highestPrio
+      # (mkForce -> 50 here). The loser (priority 1000) stays losing.
+      wonlessDefs = [
+        {
+          file = "/fx/default.nix";
+          value = 8000;
+          priority = 1000;
+        }
+        {
+          file = "/fx/force.nix";
+          value = 9000;
+          priority = 50;
+        }
+      ];
+      wonlessPatched = eval.options // {
+        port = eval.options.port // {
+          definitionsWithLocationsAndPriorities = wonlessDefs;
+        };
+      };
+      wonlessAst = nixWhy.resolve {
+        modules = [ ];
+        options = wonlessPatched;
+        inherit (eval) config;
+        path = "port";
+      };
+      wonlessWinners = lib.filter (d: d.wins) wonlessAst.definitions;
+      wonlessLoser = lib.findFirst (d: d.priority == 1000) null wonlessAst.definitions;
+
+      # Value shape-guard: an order wrapper reaching `value` raw must be
+      # unwrapped to its content (order affects sort position, not value).
+      orderDefs = [
+        {
+          file = "/fx/order.nix";
+          value = {
+            _type = "order";
+            priority = 1500;
+            content = 42;
+          };
+          priority = 100;
+          won = true;
+        }
+      ];
+      orderPatched = eval.options // {
+        port = eval.options.port // {
+          definitionsWithLocationsAndPriorities = orderDefs;
+        };
+      };
+      orderAst = nixWhy.resolve {
+        modules = [ ];
+        options = orderPatched;
+        inherit (eval) config;
+        path = "port";
+      };
+      orderDef = lib.findFirst (d: d.file == "/fx/order.nix") null orderAst.definitions;
+    in
+    [
+      {
+        name = "native-surfaces-all-definitions";
+        passed = (builtins.length nativeAst.definitions) == 2;
+      }
+      {
+        name = "native-loser-marked-losing";
+        passed =
+          loser != null && loser.wins == false && loser.priorityKind == "mkDefault" && loser.value == 8000;
+      }
+      {
+        name = "native-winner-marked-winning";
+        passed =
+          winner != null && winner.wins == true && winner.value == 9000 && winner.priorityKind == "mkForce";
+      }
+      {
+        name = "native-fallback-unchanged-single-winner";
+        passed =
+          (builtins.length fallbackAst.definitions) == 1
+          && builtins.all (d: d.wins == true) fallbackAst.definitions;
+      }
+      {
+        name = "native-wonless-derives-single-winner";
+        passed =
+          (builtins.length wonlessWinners) == 1
+          && (builtins.head wonlessWinners).priority == 50
+          && wonlessLoser != null
+          && wonlessLoser.wins == false;
+      }
+      {
+        name = "native-order-wrapper-value-unwrapped";
+        passed = orderDef != null && orderDef.value == 42;
+      }
+    ];
+
+  nativeResults = map (t: {
+    inherit (t) name;
+    inherit (t) passed;
+  }) nativeTests;
+
   results =
     fixtureResults
     ++ v03Results
@@ -634,11 +790,12 @@ let
     ++ ssotResults
     ++ crashFixResults
     ++ unionResults
-    ++ adapterResults;
+    ++ adapterResults
+    ++ nativeResults;
   failures = builtins.filter (r: !r.passed) results;
 in
 {
   inherit results failures;
   pass = failures == [ ];
-  summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline + ${toString (builtins.length v04Results)} v0.4 inline + ${toString (builtins.length driftResults)} drift-guard + ${toString (builtins.length sourceResults)} source-parse + ${toString (builtins.length ssotResults)} ssot + ${toString (builtins.length crashFixResults)} crash-fix + ${toString (builtins.length unionResults)} union + ${toString (builtins.length adapterResults)} adapter), ${toString (builtins.length failures)} failed";
+  summary = "${toString (builtins.length results)} tests (${toString (builtins.length fixtureResults)} fixtures + ${toString (builtins.length v03Results)} v0.3 inline + ${toString (builtins.length v04Results)} v0.4 inline + ${toString (builtins.length driftResults)} drift-guard + ${toString (builtins.length sourceResults)} source-parse + ${toString (builtins.length ssotResults)} ssot + ${toString (builtins.length crashFixResults)} crash-fix + ${toString (builtins.length unionResults)} union + ${toString (builtins.length adapterResults)} adapter + ${toString (builtins.length nativeResults)} native), ${toString (builtins.length failures)} failed";
 }

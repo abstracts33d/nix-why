@@ -91,7 +91,10 @@ let
       in
       walkDefs ++ extraDefs
     else
-      map (def: finalizeDef (def // { wins = true; })) fromOptionsDefs;
+      # Respect a def's own win flag: the native surface (wedge-PR) marks
+      # priority-losers wins=false. The legacy surface has no per-def flag
+      # and defaults to wins=true (winner-only list).
+      map (def: finalizeDef (def // { wins = def.wins or true; })) fromOptionsDefs;
 
   # The mkOptionDefault priority that nixpkgs assigns to an option's
   # declared `default`. Treating this as "not a user definition" is what

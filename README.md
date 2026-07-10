@@ -185,6 +185,13 @@ When `--full` cannot reconstruct the walk, output stays on the default
 tier and `moduleWalkAvailable` is `false`; the resolved value, priority,
 type and declaration remain correct. The tool degrades, it does not lie.
 
+On a nixpkgs that exposes the native `definitionsWithLocationsAndPriorities`
+option attribute (a proposed module-system change), the
+default tier also surfaces priority-losers with their per-definition
+priority kind: no `--full`, no module walk. mkIf-filtered candidates and
+per-definition line numbers still require the walk. On any nixpkgs without
+the attribute, the default tier is winner-only as before.
+
 ### Freeform / undeclared attributes
 
 `nix.settings.*` and other freeform attrs have a value in the config

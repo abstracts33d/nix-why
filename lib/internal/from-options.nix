@@ -116,21 +116,54 @@ let
   buildDefinitions =
     opt:
     let
+      # Native provenance: the wedge-PR adds a pre-filter definition list
+      # carrying per-def priority + win flag (priority-losers included).
+      # When the host nixpkgs exposes it, the surface path gains full
+      # per-def priority and loser visibility without the module walk.
+      native = opt.definitionsWithLocationsAndPriorities or null;
       defs = opt.definitionsWithLocations or [ ];
       prio = opt.highestPrio or null;
+
+      nativeHasWinner = lib.any (d: d.won or false) native;
+      winsOf =
+        def:
+        def.won or (
+          # contract slip: no def carries won; derive from the winning
+          # priority so a defined option never renders winnerless
+          !nativeHasWinner && prio != null && (def.priority or null) == prio
+        );
+      valueOf =
+        def:
+        let
+          v = def.value or null;
+        in
+        # order wrappers change sort position, not the value; unwrap.
+        # other property nodes pass through untouched (JSON-safe).
+        if builtins.isAttrs v && (v._type or "") == "order" then v.content or null else v;
     in
-    map (def: {
-      file = def.file or null;
-      line = null;
-      priority = prio;
-      # Label via the single source (priority.nix), not null: the
-      # options-surface path knows the winning priority number, so it
-      # can name its kind. Per-def line/guard still need the module-walk.
-      priorityKind = if prio == null then null else priority.labelFor prio;
-      guardedBy = null;
-      value = def.value or null;
-      wins = true;
-    }) defs;
+    if native != null then
+      map (def: {
+        file = def.file or null;
+        line = null;
+        priority = def.priority or null;
+        priorityKind = if (def.priority or null) != null then priority.labelFor def.priority else null;
+        guardedBy = null;
+        value = valueOf def;
+        wins = winsOf def;
+      }) native
+    else
+      map (def: {
+        file = def.file or null;
+        line = null;
+        priority = prio;
+        # Label via the single source (priority.nix), not null: the
+        # options-surface path knows the winning priority number, so it
+        # can name its kind. Per-def line/guard still need the module-walk.
+        priorityKind = if prio == null then null else priority.labelFor prio;
+        guardedBy = null;
+        value = def.value or null;
+        wins = true;
+      }) defs;
 in
 {
   fromOptions =

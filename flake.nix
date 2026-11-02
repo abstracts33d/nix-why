@@ -18,96 +18,15 @@
       treefmt-nix,
     }:
     let
-      # Single source of truth for the package version. Bump this when
-      # cutting a release; both the derivation version and the runtime
-      # --version output read from here.
-      nixWhyVersion = "0.5.1";
-
       eachSystem = nixpkgs.lib.genAttrs (import systems);
       pkgsFor = system: nixpkgs.legacyPackages.${system};
       treefmtEval = eachSystem (system: treefmt-nix.lib.evalModule (pkgsFor system) ./treefmt.nix);
 
-      # Helper: package one of the cli scripts. All siblings share the
-      # same shape:
-      #   - wrap with NIX_WHY_LIB set to the shared lib copy (when
-      #     needsLib)
-      #   - wrap with NIX_WHY_CLI_EXPR_DIR set to the cli/expr/ copy
-      #     (when needsExpr) - the CLI calls `nix eval -f` on these
-      #     instead of building heredoc-Nix at runtime
-      #   - jq + nix in PATH
-      mkCliScript =
-        {
-          name,
-          desc,
-          needsLib ? true,
-          needsExpr ? true,
-          extraDeps ? [ ],
-        }:
-        pkgs:
-        pkgs.stdenv.mkDerivation {
-          pname = name;
-          version = nixWhyVersion;
-          src = ./.;
-          nativeBuildInputs = [ pkgs.makeWrapper ];
-          dontConfigure = true;
-          dontBuild = true;
-          installPhase = ''
-            runHook preInstall
-            mkdir -p $out/bin $out/share/nix-why
-            ${nixpkgs.lib.optionalString needsLib "cp -r lib $out/share/nix-why/lib"}
-            ${nixpkgs.lib.optionalString needsExpr "cp -r cli/expr $out/share/nix-why/cli-expr"}
-            install -Dm644 cli/_lib.sh $out/share/nix-why/_lib.sh
-            install -Dm755 cli/${name} $out/bin/${name}
-            wrapProgram $out/bin/${name} \
-              --set NIX_WHY_VERSION ${nixWhyVersion} \
-              --set NIX_WHY_CLI_SH $out/share/nix-why/_lib.sh \
-              ${nixpkgs.lib.optionalString needsLib "--set NIX_WHY_LIB $out/share/nix-why/lib"} \
-              ${nixpkgs.lib.optionalString needsExpr "--set NIX_WHY_CLI_EXPR_DIR $out/share/nix-why/cli-expr"} \
-              --prefix PATH : ${
-                nixpkgs.lib.makeBinPath (
-                  [
-                    pkgs.jq
-                    pkgs.nix
-                    # GNU coreutils pinned so mktemp/realpath/sort behave
-                    # identically on darwin (BSD userland) and linux.
-                    pkgs.coreutils
-                  ]
-                  ++ extraDeps
-                )
-              }
-            runHook postInstall
-          '';
-          meta = {
-            description = desc;
-            mainProgram = name;
-            license = nixpkgs.lib.licenses.mit;
-            platforms = nixpkgs.lib.platforms.unix;
-          };
-        };
-
-      mkNixWhyOption = mkCliScript {
-        name = "nix-why-option";
-        desc = "Module-system option resolution debugger";
-      };
-      mkNixWhyConflict = mkCliScript {
-        name = "nix-why-conflict";
-        desc = "Focused view on merge conflicts for a single option";
-      };
-      mkNixWhyRecursion = mkCliScript {
-        name = "nix-why-recursion";
-        desc = "Surface infinite-recursion cycles in --show-trace output";
-        # The recursion tool is a pure text parser; no library or Nix
-        # expressions needed.
-        needsLib = false;
-        needsExpr = false;
-      };
-      mkNixWhyOverlay = mkCliScript {
-        name = "nix-why-overlay";
-        desc = "List nixpkgs overlays applied to a flake target";
-        # Overlay tool uses its own Nix expressions, no nix-why library
-        # involvement.
-        needsLib = false;
-      };
+      # The CLI derivations live in package.nix so the flake and the
+      # non-flake default.nix build them the same way. callPackage feeds
+      # in stdenv/makeWrapper/jq/nix/coreutils; version comes from
+      # version.nix.
+      packagesFor = system: (pkgsFor system).callPackage ./package.nix { };
     in
     {
       # The strategic asset: pure Nix introspection library. System-
@@ -119,20 +38,37 @@
       # downstream flakes (fleet dev hosts) get `pkgs.nix-why-option` etc.
       # without referencing per-system `packages`. Built from `final` so the
       # CLIs resolve deps through the consumer's package set.
+      # Output keys are listed literally so the overlay's attrset shape is
+      # known without forcing `final` - returning the callPackage result
+      # directly makes the keyset depend on `final`'s keyset (infinite
+      # recursion via callPackage's intersectAttrs).
       overlays.default = final: _prev: {
-        nix-why-option = mkNixWhyOption final;
-        nix-why-conflict = mkNixWhyConflict final;
-        nix-why-recursion = mkNixWhyRecursion final;
-        nix-why-overlay = mkNixWhyOverlay final;
+        inherit (final.callPackage ./package.nix { })
+          nix-why-option
+          nix-why-conflict
+          nix-why-recursion
+          nix-why-overlay
+          ;
       };
 
-      packages = eachSystem (system: rec {
-        nix-why-option = mkNixWhyOption (pkgsFor system);
-        nix-why-conflict = mkNixWhyConflict (pkgsFor system);
-        nix-why-recursion = mkNixWhyRecursion (pkgsFor system);
-        nix-why-overlay = mkNixWhyOverlay (pkgsFor system);
-        default = nix-why-option;
-      });
+      # Inherit the four explicitly: callPackage wraps its result in
+      # makeOverridable, so `p` also carries override/overrideDerivation,
+      # which are not derivations and break `nix flake check` if exposed.
+      packages = eachSystem (
+        system:
+        let
+          p = packagesFor system;
+        in
+        {
+          inherit (p)
+            nix-why-option
+            nix-why-conflict
+            nix-why-recursion
+            nix-why-overlay
+            ;
+          default = p.nix-why-option;
+        }
+      );
 
       apps = eachSystem (system: {
         option = {

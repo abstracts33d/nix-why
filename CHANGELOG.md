@@ -4,6 +4,14 @@ All notable changes to this project are tracked here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 uses semantic versioning.
 
+## Unreleased
+
+- **Native provenance when the host nixpkgs exposes it.** When an option
+  carries `definitionsWithLocationsAndPriorities` (a proposed module-system
+  change), the default path surfaces priority-losers and
+  per-definition priority kinds without `--full` or the module walk.
+  Behaviour is unchanged on any nixpkgs that lacks the attribute.
+
 ## v0.5.1 - 2026-06-16
 
 Patch release from launch feedback.
